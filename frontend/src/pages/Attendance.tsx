@@ -39,6 +39,26 @@ interface WebSocketResponse {
   timestamp?: string;
 }
 
+interface AttendanceUpdate {
+  user_id: string;
+  name: string;
+  entry_type: 'entry' | 'exit';
+  timestamp: string;
+}
+
+// Add new interface for WebSocket attendance update messages
+interface WebSocketAttendanceUpdate {
+  type: string;
+  data: Array<{
+    action: 'entry' | 'exit' | 'delete';
+    user_id: string;
+    name: string;
+    timestamp: string;
+    similarity?: number;
+    attendance_id?: number;
+  }>;
+}
+
 export default function Attendance() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -52,12 +72,110 @@ export default function Attendance() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string>('');
   const [isVideoMode, setIsVideoMode] = useState(false);
+  const [recentAttendance, setRecentAttendance] = useState<AttendanceUpdate[]>([]);
   const webcamRef = useRef<Webcam>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const attendanceWsRef = useRef<WebSocket | null>(null);
   const streamIntervalRef = useRef<number | object | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const isStreamingRef = useRef<boolean>(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Set up WebSocket connection for attendance updates
+  useEffect(() => {
+    // Create WebSocket connection for attendance updates
+    const attendanceWs = new WebSocket('ws://localhost:8000/ws/attendance');
+    attendanceWsRef.current = attendanceWs;
+
+    attendanceWs.onopen = () => {
+      console.log('Attendance updates WebSocket connection established');
+    };
+
+    attendanceWs.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        // Check if this is an attendance update message
+        if (data.type === 'attendance_update') {
+          // Process each attendance update
+          data.data.forEach((update: {
+            action: 'entry' | 'exit' | 'delete';
+            user_id: string;
+            name: string;
+            timestamp: string;
+            similarity?: number;
+            attendance_id?: number;
+          }) => {
+            // Convert the action to entry_type format expected by the UI
+            const entry_type = update.action === 'delete' ? 'exit' : update.action;
+            
+            // Create an attendance update object
+            const attendanceUpdate: AttendanceUpdate = {
+              user_id: update.user_id,
+              name: update.name,
+              entry_type: entry_type,
+              timestamp: update.timestamp
+            };
+            
+            // Add the new attendance to the recent list
+            setRecentAttendance(prev => {
+              const newList = [attendanceUpdate, ...prev];
+              // Keep only the 10 most recent entries
+              return newList.slice(0, 10);
+            });
+            
+            // Show a notification
+            const localTime = format(new Date(update.timestamp), 'PPpp');
+            setMessage({
+              type: 'success',
+              text: `${update.name} (${update.user_id}) marked ${entry_type} at ${localTime}`,
+            });
+          });
+        }
+        // If it's not an attendance update, it might be a regular response from the attendance WebSocket
+        else if (data.multiple_users && data.users) {
+          // Handle multiple users
+          setMultipleUsers(data.users);
+          setFaceCount(data.users.length);
+          
+          // Create a summary message
+          const successCount = data.users.filter((u: UserResult) => 
+            u.message.includes('successfully') || 
+            u.message.includes('already marked')
+          ).length;
+          
+          if (successCount > 0) {
+            setMessage({
+              type: 'success',
+              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
+            });
+          } else {
+            setMessage({
+              type: 'error',
+              text: 'No users were processed successfully',
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
+      }
+    };
+
+    attendanceWs.onerror = (error) => {
+      console.error('Attendance updates WebSocket error:', error);
+    };
+
+    attendanceWs.onclose = () => {
+      console.log('Attendance updates WebSocket connection closed');
+    };
+
+    // Clean up WebSocket connection on component unmount
+    return () => {
+      if (attendanceWsRef.current) {
+        attendanceWsRef.current.close();
+      }
+    };
+  }, []);
 
   // Clean up WebSocket connection on component unmount
   useEffect(() => {
@@ -103,7 +221,7 @@ export default function Attendance() {
           setFaceCount(data.users.length);
           
           // Create a summary message
-          const successCount = data.users.filter(u => 
+          const successCount = data.users.filter((u: UserResult) => 
             u.message.includes('successfully') || 
             u.message.includes('already marked')
           ).length;
@@ -119,20 +237,6 @@ export default function Attendance() {
               text: 'No users were processed successfully',
             });
           }
-        } else {
-          // Handle single user (legacy format)
-          let messageText = `${data.message}: ${data.name} (${data.user_id})`;
-          if (data.timestamp) {
-            const localTime = format(new Date(data.timestamp), 'PPpp');
-            messageText += ` at ${localTime}`;
-          }
-
-          setMessage({
-            type: 'success',
-            text: messageText,
-          });
-          setMultipleUsers([]);
-          setFaceCount(1);
         }
       };
 
@@ -150,28 +254,29 @@ export default function Attendance() {
         isStreamingRef.current = false;
       };
 
-      // Set up continuous streaming using requestAnimationFrame
+      // Set up streaming to send one frame per second
       isStreamingRef.current = true;
       
-      const streamFrame = () => {
+      const sendFrame = () => {
         if (!isStreamingRef.current) return;
         
         if (webcamRef.current && ws.readyState === WebSocket.OPEN) {
           const imageSrc = webcamRef.current.getScreenshot();
           if (imageSrc) {
+            console.log('Sending image to server');
             ws.send(JSON.stringify({ 
               image: imageSrc,
               entry_type: entryType 
             }));
           }
         }
-        
-        // Request the next frame
-        animationFrameRef.current = requestAnimationFrame(streamFrame);
       };
       
-      // Start the streaming loop
-      animationFrameRef.current = requestAnimationFrame(streamFrame);
+      // Send the first frame immediately
+      sendFrame();
+      
+      // Set up interval to send frames once per second
+      streamIntervalRef.current = setInterval(sendFrame, 1000);
     }
   }, [webcamRef, entryType]);
 
@@ -181,9 +286,9 @@ export default function Attendance() {
       wsRef.current = null;
     }
     
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
+    if (streamIntervalRef.current) {
+      clearInterval(streamIntervalRef.current as number);
+      streamIntervalRef.current = null;
     }
     
     isStreamingRef.current = false;
@@ -227,7 +332,7 @@ export default function Attendance() {
           setFaceCount(data.users.length);
           
           // Create a summary message
-          const successCount = data.users.filter(u => 
+          const successCount = data.users.filter((u: UserResult) => 
             u.message.includes('successfully') || 
             u.message.includes('already marked')
           ).length;
@@ -316,7 +421,7 @@ export default function Attendance() {
           setMultipleUsers(data.users);
           setFaceCount(data.users.length);
           
-          const successCount = data.users.filter(u => 
+          const successCount = data.users.filter((u: UserResult) => 
             u.message.includes('successfully') || 
             u.message.includes('already marked')
           ).length;
@@ -352,7 +457,7 @@ export default function Attendance() {
       // Set up video streaming
       isStreamingRef.current = true;
       
-      const streamFrame = () => {
+      const sendFrame = () => {
         if (!isStreamingRef.current) return;
         
         if (videoRef.current && ws.readyState === WebSocket.OPEN) {
@@ -369,14 +474,13 @@ export default function Attendance() {
           if (ctx) {
             ctx.drawImage(videoRef.current, 0, 0);
             const imageSrc = canvas.toDataURL('image/jpeg');
+            console.log('Sending video to server');
             ws.send(JSON.stringify({ 
               image: imageSrc,
               entry_type: entryType 
             }));
           }
         }
-        
-        animationFrameRef.current = requestAnimationFrame(streamFrame);
       };
       
       // Add event listener for video end
@@ -392,7 +496,11 @@ export default function Attendance() {
         videoRef.current.play();
       }
       
-      animationFrameRef.current = requestAnimationFrame(streamFrame);
+      // Send the first frame immediately
+      sendFrame();
+      
+      // Set up interval to send frames every 2 seconds
+      streamIntervalRef.current = setInterval(sendFrame, 2);
       
       // Clean up event listener when streaming stops
       return () => {
@@ -569,6 +677,40 @@ export default function Attendance() {
                         />
                       </ListItem>
                       {index < multipleUsers.length - 1 && <Divider />}
+                    </div>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Recent Attendance Updates */}
+          {recentAttendance.length > 0 && (
+            <Card variant="outlined" sx={{ mt: 2 }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Recent Attendance Updates
+                </Typography>
+                <List>
+                  {recentAttendance.map((attendance, index) => (
+                    <div key={`${attendance.user_id}-${attendance.timestamp}-${index}`}>
+                      <ListItem>
+                        <ListItemText
+                          primary={`${attendance.name} (${attendance.user_id})`}
+                          secondary={
+                            <>
+                              <Typography component="span" variant="body2" color="text.primary">
+                                Marked {attendance.entry_type}
+                              </Typography>
+                              <Typography component="span" variant="body2" color="text.secondary">
+                                {' at '}
+                                {format(new Date(attendance.timestamp), 'PPpp')}
+                              </Typography>
+                            </>
+                          }
+                        />
+                      </ListItem>
+                      {index < recentAttendance.length - 1 && <Divider />}
                     </div>
                   ))}
                 </List>

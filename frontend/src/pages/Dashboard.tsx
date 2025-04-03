@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Card,
@@ -71,6 +71,7 @@ export default function Dashboard() {
   const [attendanceDeleteDialogOpen, setAttendanceDeleteDialogOpen] = useState(false);
   const [attendanceToDelete, setAttendanceToDelete] = useState<AttendanceRecord | null>(null);
   const [attendanceDeleteLoading, setAttendanceDeleteLoading] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
 
   const attendanceColumns: GridColDef[] = [
     {
@@ -224,16 +225,54 @@ export default function Dashboard() {
     setAttendanceToDelete(null);
   };
 
+  // Set up WebSocket connection for attendance updates
   useEffect(() => {
+    // Create WebSocket connection for attendance updates
+    const ws = new WebSocket('ws://localhost:8000/ws/attendance-updates');
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('Dashboard WebSocket connection established');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        // When we receive a message, it means a new attendance record was added
+        // Fetch the updated records
+        fetchRecords();
+      } catch (error) {
+        console.error('Error processing attendance update:', error);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error('Dashboard WebSocket error:', error);
+    };
+
+    ws.onclose = () => {
+      console.log('Dashboard WebSocket connection closed');
+    };
+
+    // Clean up WebSocket connection on component unmount
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Initial data fetch
     fetchRecords();
     fetchUsers();
-    // Set up polling for real-time updates
+    
+    // Set up polling only for users (since we're using WebSockets for attendance)
     const interval = setInterval(() => {
-      fetchRecords();
       if (tabValue === 1) { // Only fetch users when on the users tab
         fetchUsers();
       }
-    }, 1000); // Poll every 1 second instead of 5 seconds
+    }, 5000); // Poll users every 5 seconds
+    
     return () => clearInterval(interval);
   }, [tabValue]);
 
@@ -266,6 +305,7 @@ export default function Dashboard() {
                 <DataGrid
                   rows={records}
                   columns={attendanceColumns}
+                  getRowId={(row) => row.id}
                   pageSize={10}
                   rowsPerPageOptions={[10, 25, 50]}
                   disableSelectionOnClick
