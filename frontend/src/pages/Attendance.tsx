@@ -7,8 +7,6 @@ import {
   Typography,
   CircularProgress,
   Alert,
-  Switch,
-  FormControlLabel,
   ToggleButton,
   ToggleButtonGroup,
   List,
@@ -37,6 +35,9 @@ interface WebSocketResponse {
   user_id?: string;
   name?: string;
   timestamp?: string;
+  status?: string;
+  type?: string;
+  data?: any;
 }
 
 interface AttendanceUpdate {
@@ -44,19 +45,6 @@ interface AttendanceUpdate {
   name: string;
   entry_type: 'entry' | 'exit';
   timestamp: string;
-}
-
-// Add new interface for WebSocket attendance update messages
-interface WebSocketAttendanceUpdate {
-  type: string;
-  data: Array<{
-    action: 'entry' | 'exit' | 'delete';
-    user_id: string;
-    name: string;
-    timestamp: string;
-    similarity?: number;
-    attendance_id?: number;
-  }>;
 }
 
 export default function Attendance() {
@@ -73,175 +61,163 @@ export default function Attendance() {
   const [videoPreview, setVideoPreview] = useState<string>('');
   const [isVideoMode, setIsVideoMode] = useState(false);
   const [recentAttendance, setRecentAttendance] = useState<AttendanceUpdate[]>([]);
+  const [attendanceData, setAttendanceData] = useState<any[]>([]);
+  const [userData, setUserData] = useState<any[]>([]);
   const webcamRef = useRef<Webcam>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const attendanceWsRef = useRef<WebSocket | null>(null);
-  const streamIntervalRef = useRef<number | object | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
+  const streamIntervalRef = useRef<number | null>(null);
   const isStreamingRef = useRef<boolean>(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
+  const isConnectingRef = useRef<boolean>(false);
+  const MAX_RECONNECT_ATTEMPTS = 5;
 
-  // Set up WebSocket connection for attendance updates
+  // Set up WebSocket connection
   useEffect(() => {
-    // Create WebSocket connection for attendance updates
-    const attendanceWs = new WebSocket('ws://localhost:8000/ws/attendance');
-    attendanceWsRef.current = attendanceWs;
-
-    attendanceWs.onopen = () => {
-      console.log('Attendance updates WebSocket connection established');
-    };
-
-    attendanceWs.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Check if this is an attendance update message
-        if (data.type === 'attendance_update') {
-          // Process each attendance update
-          data.data.forEach((update: {
-            action: 'entry' | 'exit' | 'delete';
-            user_id: string;
-            name: string;
-            timestamp: string;
-            similarity?: number;
-            attendance_id?: number;
-          }) => {
-            // Convert the action to entry_type format expected by the UI
-            const entry_type = update.action === 'delete' ? 'exit' : update.action;
-            
-            // Create an attendance update object
-            const attendanceUpdate: AttendanceUpdate = {
-              user_id: update.user_id,
-              name: update.name,
-              entry_type: entry_type,
-              timestamp: update.timestamp
-            };
-            
-            // Add the new attendance to the recent list
-            setRecentAttendance(prev => {
-              const newList = [attendanceUpdate, ...prev];
-              // Keep only the 10 most recent entries
-              return newList.slice(0, 10);
-            });
-            
-            // Show a notification
-            const localTime = format(new Date(update.timestamp), 'PPpp');
-            setMessage({
-              type: 'success',
-              text: `${update.name} (${update.user_id}) marked ${entry_type} at ${localTime}`,
-            });
-          });
-        }
-        // If it's not an attendance update, it might be a regular response from the attendance WebSocket
-        else if (data.multiple_users && data.users) {
-          // Handle multiple users
-          setMultipleUsers(data.users);
-          setFaceCount(data.users.length);
-          
-          // Create a summary message
-          const successCount = data.users.filter((u: UserResult) => 
-            u.message.includes('successfully') || 
-            u.message.includes('already marked')
-          ).length;
-          
-          if (successCount > 0) {
-            setMessage({
-              type: 'success',
-              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
-            });
-          } else {
-            setMessage({
-              type: 'error',
-              text: 'No users were processed successfully',
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+    // Create WebSocket connection
+    const connectWebSocket = () => {
+      // Prevent multiple connection attempts
+      if (isConnectingRef.current || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
+        return;
       }
-    };
-
-    attendanceWs.onerror = (error) => {
-      console.error('Attendance updates WebSocket error:', error);
-    };
-
-    attendanceWs.onclose = () => {
-      console.log('Attendance updates WebSocket connection closed');
-    };
-
-    // Clean up WebSocket connection on component unmount
-    return () => {
-      if (attendanceWsRef.current) {
-        attendanceWsRef.current.close();
-      }
-    };
-  }, []);
-
-  // Clean up WebSocket connection on component unmount
-  useEffect(() => {
-    return () => {
+      
+      isConnectingRef.current = true;
+      
+      // Close any existing connection before creating a new one
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      isStreamingRef.current = false;
-    };
-  }, []);
-
-  const startStreaming = useCallback(() => {
-    if (webcamRef.current) {
-      setIsStreaming(true);
-      setMessage({ type: null, text: '' });
-      setMultipleUsers([]);
-      setFaceCount(0);
-
-      // Create WebSocket connection
+      
       const ws = new WebSocket('ws://localhost:8000/ws/attendance');
       wsRef.current = ws;
 
       ws.onopen = () => {
         console.log('WebSocket connection established');
+        reconnectAttemptsRef.current = 0;
+        isConnectingRef.current = false;
+        setMessage({
+          type: 'success',
+          text: 'WebSocket connection established',
+        });
+        
+        // Request initial data
+        ws.send(JSON.stringify({ type: 'get_attendance' }));
+        ws.send(JSON.stringify({ type: 'get_users' }));
       };
 
       ws.onmessage = (event) => {
-        const data: WebSocketResponse = JSON.parse(event.data);
-        
-        if (data.error) {
-          setMessage({
-            type: 'error',
-            text: data.error,
-          });
-          setMultipleUsers([]);
-          setFaceCount(0);
-        } else if (data.multiple_users && data.users) {
-          // Handle multiple users
-          setMultipleUsers(data.users);
-          setFaceCount(data.users.length);
+        try {
+          const data: WebSocketResponse = JSON.parse(event.data);
           
-          // Create a summary message
-          const successCount = data.users.filter((u: UserResult) => 
-            u.message.includes('successfully') || 
-            u.message.includes('already marked')
-          ).length;
-          
-          if (successCount > 0) {
-            setMessage({
-              type: 'success',
-              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
+          // Handle different message types
+          if (data.type === 'attendance_update') {
+            // Process attendance updates
+            data.data.forEach((update: {
+              action: 'entry' | 'exit' | 'delete';
+              user_id: string;
+              name: string;
+              timestamp: string;
+              similarity?: number;
+              attendance_id?: number;
+            }) => {
+              // Convert the action to entry_type format expected by the UI
+              const entry_type = update.action === 'delete' ? 'exit' : update.action;
+              
+              // Create an attendance update object
+              const attendanceUpdate: AttendanceUpdate = {
+                user_id: update.user_id,
+                name: update.name,
+                entry_type: entry_type,
+                timestamp: update.timestamp
+              };
+              
+              // Add the new attendance to the recent list
+              setRecentAttendance(prev => {
+                const newList = [attendanceUpdate, ...prev];
+                // Keep only the 10 most recent entries
+                return newList.slice(0, 10);
+              });
+              
+              // Show a notification
+              const localTime = format(new Date(update.timestamp), 'PPpp');
+              setMessage({
+                type: 'success',
+                text: `${update.name} (${update.user_id}) marked ${entry_type} at ${localTime}`,
+              });
             });
-          } else {
+          } 
+          else if (data.type === 'attendance_data') {
+            // Update attendance data
+            setAttendanceData(data.data || []);
+          }
+          else if (data.type === 'user_data') {
+            // Update user data
+            setUserData(data.data || []);
+          }
+          else if (data.type === 'ping') {
+            // Respond to ping with pong
+            ws.send(JSON.stringify({ type: 'pong' }));
+          }
+          else if (data.multiple_users && data.users) {
+            // Handle multiple users
+            setMultipleUsers(data.users);
+            setFaceCount(data.users.length);
+            
+            // Create a summary message
+            const successCount = data.users.filter((u: UserResult) => 
+              u.message.includes('successfully') || 
+              u.message.includes('already marked')
+            ).length;
+            
+            if (successCount > 0) {
+              setMessage({
+                type: 'success',
+                text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
+              });
+            } else {
+              setMessage({
+                type: 'error',
+                text: 'No users were processed successfully',
+              });
+            }
+          }
+          else if (data.status === 'rate_limited') {
+            // Handle rate limiting
+            console.log('Rate limited by server, skipping frame');
+          }
+          else if (data.status === 'no_face_detected') {
+            // Handle no face detected
+            setFaceCount(0);
+          }
+          else if (data.status === 'no_matching_users') {
+            // Handle no matching users
+            setMultipleUsers([]);
+            setFaceCount(0);
+          }
+          else if (data.status === 'error') {
+            // Handle error
             setMessage({
               type: 'error',
-              text: 'No users were processed successfully',
+              text: data.message || 'An error occurred',
             });
           }
+          else if (data.status === 'success') {
+            // Handle success
+            setMessage({
+              type: 'success',
+              text: data.message || 'Operation successful',
+            });
+          }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error);
         }
       };
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
+        isConnectingRef.current = false;
         setMessage({
           type: 'error',
           text: 'WebSocket connection error',
@@ -250,9 +226,62 @@ export default function Attendance() {
 
       ws.onclose = () => {
         console.log('WebSocket connection closed');
+        isConnectingRef.current = false;
         setIsStreaming(false);
         isStreamingRef.current = false;
+        
+        // Attempt to reconnect if not manually closed
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current += 1;
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+          console.log(`Attempting to reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`);
+          
+          // Clear any existing timeout before setting a new one
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+          }
+          
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            connectWebSocket();
+          }, delay);
+        }
       };
+    };
+    
+    // Connect to WebSocket
+    connectWebSocket();
+    
+    // Clean up on unmount
+    return () => {
+      // Clear any pending reconnection attempts
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      
+      // Stop any active streaming
+      if (streamIntervalRef.current) {
+        clearInterval(streamIntervalRef.current);
+        streamIntervalRef.current = null;
+      }
+      
+      isStreamingRef.current = false;
+      
+      // Close the WebSocket connection
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, []);
+
+  const startStreaming = useCallback(() => {
+    if (webcamRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setIsStreaming(true);
+      setMessage({ type: null, text: '' });
+      setMultipleUsers([]);
+      setFaceCount(0);
 
       // Set up streaming to send one frame per second
       isStreamingRef.current = true;
@@ -260,11 +289,10 @@ export default function Attendance() {
       const sendFrame = () => {
         if (!isStreamingRef.current) return;
         
-        if (webcamRef.current && ws.readyState === WebSocket.OPEN) {
+        if (webcamRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           const imageSrc = webcamRef.current.getScreenshot();
           if (imageSrc) {
-            console.log('Sending image to server');
-            ws.send(JSON.stringify({ 
+            wsRef.current.send(JSON.stringify({ 
               image: imageSrc,
               entry_type: entryType 
             }));
@@ -276,18 +304,18 @@ export default function Attendance() {
       sendFrame();
       
       // Set up interval to send frames once per second
-      streamIntervalRef.current = setInterval(sendFrame, 1000);
+      streamIntervalRef.current = setInterval(sendFrame, 50);
+    } else {
+      setMessage({
+        type: 'error',
+        text: 'WebSocket connection not available',
+      });
     }
   }, [webcamRef, entryType]);
 
   const stopStreaming = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    
     if (streamIntervalRef.current) {
-      clearInterval(streamIntervalRef.current as number);
+      clearInterval(streamIntervalRef.current);
       streamIntervalRef.current = null;
     }
     
@@ -393,66 +421,11 @@ export default function Attendance() {
   };
 
   const startVideoStream = useCallback(() => {
-    if (videoRef.current && videoFile) {
+    if (videoRef.current && videoFile && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       setIsStreaming(true);
       setMessage({ type: null, text: '' });
       setMultipleUsers([]);
       setFaceCount(0);
-
-      // Create WebSocket connection
-      const ws = new WebSocket('ws://localhost:8000/ws/attendance');
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log('WebSocket connection established');
-      };
-
-      ws.onmessage = (event) => {
-        const data: WebSocketResponse = JSON.parse(event.data);
-        
-        if (data.error) {
-          setMessage({
-            type: 'error',
-            text: data.error,
-          });
-          setMultipleUsers([]);
-          setFaceCount(0);
-        } else if (data.multiple_users && data.users) {
-          setMultipleUsers(data.users);
-          setFaceCount(data.users.length);
-          
-          const successCount = data.users.filter((u: UserResult) => 
-            u.message.includes('successfully') || 
-            u.message.includes('already marked')
-          ).length;
-          
-          if (successCount > 0) {
-            setMessage({
-              type: 'success',
-              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
-            });
-          } else {
-            setMessage({
-              type: 'error',
-              text: 'No users were processed successfully',
-            });
-          }
-        }
-      };
-
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setMessage({
-          type: 'error',
-          text: 'WebSocket connection error',
-        });
-      };
-
-      ws.onclose = () => {
-        console.log('WebSocket connection closed');
-        setIsStreaming(false);
-        isStreamingRef.current = false;
-      };
 
       // Set up video streaming
       isStreamingRef.current = true;
@@ -460,7 +433,7 @@ export default function Attendance() {
       const sendFrame = () => {
         if (!isStreamingRef.current) return;
         
-        if (videoRef.current && ws.readyState === WebSocket.OPEN) {
+        if (videoRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           // Check if video has ended
           if (videoRef.current.ended) {
             stopStreaming();
@@ -474,8 +447,7 @@ export default function Attendance() {
           if (ctx) {
             ctx.drawImage(videoRef.current, 0, 0);
             const imageSrc = canvas.toDataURL('image/jpeg');
-            console.log('Sending video to server');
-            ws.send(JSON.stringify({ 
+            wsRef.current.send(JSON.stringify({ 
               image: imageSrc,
               entry_type: entryType 
             }));
@@ -500,7 +472,7 @@ export default function Attendance() {
       sendFrame();
       
       // Set up interval to send frames every 2 seconds
-      streamIntervalRef.current = setInterval(sendFrame, 2);
+      streamIntervalRef.current = setInterval(sendFrame, 2000);
       
       // Clean up event listener when streaming stops
       return () => {
@@ -508,8 +480,78 @@ export default function Attendance() {
           videoRef.current.removeEventListener('ended', handleVideoEnd);
         }
       };
+    } else {
+      setMessage({
+        type: 'error',
+        text: 'WebSocket connection not available or video not loaded',
+      });
     }
   }, [videoFile, entryType, stopStreaming]);
+
+  const deleteAttendance = useCallback(async (attendanceId: number) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({
+          type: 'delete_attendance',
+          attendance_id: attendanceId
+        }));
+      } catch (error) {
+        setMessage({
+          type: 'error',
+          text: 'Failed to delete attendance record',
+        });
+      }
+    } else {
+      setMessage({
+        type: 'error',
+        text: 'WebSocket connection not available',
+      });
+    }
+  }, []);
+
+  const deleteUser = useCallback(async (userId: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({
+          type: 'delete_user',
+          user_id: userId
+        }));
+      } catch (error) {
+        setMessage({
+          type: 'error',
+          text: 'Failed to delete user',
+        });
+      }
+    } else {
+      setMessage({
+        type: 'error',
+        text: 'WebSocket connection not available',
+      });
+    }
+  }, []);
+
+  const registerUser = useCallback(async (userId: string, name: string, image: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({
+          type: 'register_user',
+          user_id: userId,
+          name: name,
+          image: image
+        }));
+      } catch (error) {
+        setMessage({
+          type: 'error',
+          text: 'Failed to register user',
+        });
+      }
+    } else {
+      setMessage({
+        type: 'error',
+        text: 'WebSocket connection not available',
+      });
+    }
+  }, []);
 
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>

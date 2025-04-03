@@ -14,6 +14,7 @@ import concurrent.futures
 import threading
 from queue import Queue
 import time
+import os
 
 import models
 import database
@@ -48,11 +49,20 @@ thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 # Queue for processing results
 processing_results_queue = Queue()
 
+# Queue for WebSocket responses
+websocket_responses_queue = Queue()
+
+# Dictionary to store pending futures
+pending_futures = {}
+
 # WebSocket ping interval in seconds (30 seconds)
 PING_INTERVAL = 30
 
 # WebSocket ping timeout in seconds (60 seconds)
 PING_TIMEOUT = 60
+
+# Maximum number of frames to process per second
+MAX_FRAMES_PER_SECOND = 1
 
 # Get local timezone
 try:
@@ -60,6 +70,12 @@ try:
 except:
     # Fallback if pytz is not available
     local_tz = timezone(timedelta(hours=5, minutes=30))  # IST offset as fallback
+
+# Create images directory if it doesn't exist
+IMAGES_DIR = "images"
+if not os.path.exists(IMAGES_DIR):
+    os.makedirs(IMAGES_DIR)
+    logger.info(f"Created images directory: {IMAGES_DIR}")
 
 # Function to process the queue and broadcast updates
 async def process_queue():
@@ -86,12 +102,118 @@ async def process_queue():
             # Sleep for a longer time if there was an error
             await asyncio.sleep(1)
 
+# Function to handle future completion
+def handle_future_completion(future, websocket):
+    try:
+        processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
+        
+        # Put the results in the websocket responses queue
+        websocket_responses_queue.put({
+            "websocket": websocket,
+            "processed_users": processed_users,
+            "attendance_updates": attendance_updates,
+            "last_recognized_users": last_recognized_users,
+            "no_face_count": no_face_count
+        })
+    except Exception as e:
+        logger.error(f"Error handling future completion: {str(e)}")
+        # Put error in the queue
+        websocket_responses_queue.put({
+            "websocket": websocket,
+            "error": str(e)
+        })
+    finally:
+        # Clean up the future from pending_futures
+        for key, value in list(pending_futures.items()):
+            if value == future:
+                del pending_futures[key]
+                break
+
+# Function to process the websocket responses queue
+async def process_websocket_responses():
+    """Process the websocket responses queue and send responses to clients"""
+    while True:
+        try:
+            # Check if there are any items in the queue
+            if not websocket_responses_queue.empty():
+                # Get the next item from the queue
+                item = websocket_responses_queue.get()
+                websocket = item["websocket"]
+                
+                # Check if the websocket is still in active_connections
+                if websocket not in active_connections:
+                    logger.info("Skipping response to disconnected WebSocket")
+                    websocket_responses_queue.task_done()
+                    continue
+                
+                # Check if this is an error response
+                if "error" in item:
+                    try:
+                        await websocket.send_json({"status": "processing_error", "message": item["error"]})
+                    except Exception as e:
+                        logger.error(f"Error sending error response to WebSocket: {str(e)}")
+                        # Remove the websocket from active connections if it's causing errors
+                        if websocket in active_connections:
+                            active_connections.remove(websocket)
+                    continue
+                
+                # Process the results
+                processed_users = item["processed_users"]
+                attendance_updates = item["attendance_updates"]
+                
+                if not processed_users:
+                    if item["no_face_count"] > 0:
+                        # No face detected
+                        try:
+                            await websocket.send_json({"status": "no_face_detected"})
+                        except Exception as e:
+                            logger.error(f"Error sending no_face_detected response: {str(e)}")
+                            if websocket in active_connections:
+                                active_connections.remove(websocket)
+                    else:
+                        # No matching users found
+                        try:
+                            await websocket.send_json({"status": "no_matching_users"})
+                        except Exception as e:
+                            logger.error(f"Error sending no_matching_users response: {str(e)}")
+                            if websocket in active_connections:
+                                active_connections.remove(websocket)
+                else:
+                    # Send response with all processed users to the current client
+                    try:
+                        await websocket.send_json({
+                            "multiple_users": True,
+                            "users": processed_users
+                        })
+                    except Exception as e:
+                        logger.error(f"Error sending processed_users response: {str(e)}")
+                        if websocket in active_connections:
+                            active_connections.remove(websocket)
+                    
+                    # Add attendance updates to the queue for broadcasting
+                    if attendance_updates:
+                        processing_results_queue.put({
+                            "type": "attendance_update",
+                            "data": attendance_updates
+                        })
+                
+                # Mark the task as done
+                websocket_responses_queue.task_done()
+            
+            # Sleep for a short time to avoid busy waiting
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Error processing websocket responses: {str(e)}")
+            # Sleep for a longer time if there was an error
+            await asyncio.sleep(1)
+
 # Start the queue processing task when the application starts
 @app.on_event("startup")
 async def startup_event():
-    """Start the queue processing task when the application starts"""
+    """Start the queue processing tasks when the application starts"""
     asyncio.create_task(process_queue())
-    logger.info("Queue processing task started")
+    asyncio.create_task(process_websocket_responses())
+    logger.info("Queue processing tasks started")
 
 async def broadcast_attendance_update(attendance_data):
     """Broadcast attendance updates to all connected clients"""
@@ -142,14 +264,20 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
     Args:
         image_data: Base64 encoded image data
         entry_type: Type of entry (entry or exit)
-        db_session: Database session
+        db_session: Database session (will be closed and replaced with a new one)
         last_recognized_users: Dictionary tracking recognized users
         no_face_count: Counter for frames with no face
         
     Returns:
         Tuple of (processed_users, attendance_updates, last_recognized_users, no_face_count)
     """
+    # Create a new database session for this thread
+    thread_db = next(get_db())
+    
     try:
+        # Close the passed session to avoid connection pool exhaustion
+        db_session.close()
+        
         # Remove data URL prefix if present
         if "," in image_data:
             image_data = image_data.split(",")[1]
@@ -183,7 +311,7 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
         no_face_count = 0
         
         # Get all users from the database
-        users = db_session.query(models.User).all()
+        users = thread_db.query(models.User).all()
         
         # Find matches for all detected faces
         matches = face_recognition.find_matches_for_embeddings(face_embeddings, users)
@@ -209,7 +337,7 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
             
             # Check if attendance already marked for today
             today = get_local_date()
-            existing_attendance = db_session.query(models.Attendance).filter(
+            existing_attendance = thread_db.query(models.Attendance).filter(
                 models.Attendance.user_id == user.user_id,
                 models.Attendance.timestamp >= today
             ).first()
@@ -229,8 +357,8 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
                         user_id=user.user_id,
                         confidence=similarity  # Use similarity directly as confidence
                     )
-                    db_session.add(new_attendance)
-                    db_session.commit()
+                    thread_db.add(new_attendance)
+                    thread_db.commit()
                     
                     # Create attendance update for broadcasting
                     attendance_update = {
@@ -259,8 +387,8 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
                     })
                 else:
                     # Delete the attendance record
-                    db_session.delete(existing_attendance)
-                    db_session.commit()
+                    thread_db.delete(existing_attendance)
+                    thread_db.commit()
                     
                     # Create attendance update for broadcasting
                     attendance_update = {
@@ -284,6 +412,9 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
     except Exception as e:
         logger.error(f"Error processing image in thread: {str(e)}")
         return [], [], last_recognized_users, no_face_count
+    finally:
+        # Always close the thread's database session
+        thread_db.close()
 
 @app.post("/register")
 async def register_user(
@@ -338,6 +469,7 @@ async def ping_client(websocket: WebSocket):
 
 @app.websocket("/ws/attendance")
 async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for attendance updates and streaming"""
     await websocket.accept()
     active_connections.append(websocket)
     logger.info(f"New WebSocket connection. Total connections: {len(active_connections)}")
@@ -345,13 +477,16 @@ async def websocket_endpoint(websocket: WebSocket):
     # Start ping task
     ping_task = asyncio.create_task(ping_client(websocket))
     
+    # Track the last recognized users to detect when they leave the frame
+    last_recognized_users = {}  # Dictionary to track users by their user_id
+    no_face_count = 0
+    
+    # Track the last frame processing time to implement rate limiting
+    last_frame_time = time.time()
+    
     try:
         # Get database session
         db = next(get_db())
-        
-        # Track the last recognized users to detect when they leave the frame
-        last_recognized_users = {}  # Dictionary to track users by their user_id
-        no_face_count = 0
         
         while True:
             try:
@@ -367,6 +502,163 @@ async def websocket_endpoint(websocket: WebSocket):
                         logger.debug("Received pong from client")
                         continue
                     
+                    # Check if this is a ping request
+                    if json_data.get("type") == "ping":
+                        await websocket.send_json({"type": "pong"})
+                        continue
+                    
+                    # Check if this is a request for attendance data
+                    if json_data.get("type") == "get_attendance":
+                        # Get attendance data
+                        attendances = db.query(models.Attendance).order_by(models.Attendance.timestamp.desc()).all()
+                        attendance_data = [
+                            {
+                                "id": att.id,
+                                "user_id": att.user_id,
+                                "timestamp": att.timestamp.isoformat(),
+                                "confidence": att.confidence
+                            }
+                            for att in attendances
+                        ]
+                        await websocket.send_json({
+                            "type": "attendance_data",
+                            "data": attendance_data
+                        })
+                        continue
+                    
+                    # Check if this is a request for user data
+                    if json_data.get("type") == "get_users":
+                        # Get user data
+                        users = db.query(models.User).all()
+                        user_data = [
+                            {
+                                "user_id": user.user_id,
+                                "name": user.name,
+                                "created_at": user.created_at.isoformat() if user.created_at else None
+                            }
+                            for user in users
+                        ]
+                        await websocket.send_json({
+                            "type": "user_data",
+                            "data": user_data
+                        })
+                        continue
+                    
+                    # Check if this is a request to delete attendance
+                    if json_data.get("type") == "delete_attendance":
+                        attendance_id = json_data.get("attendance_id")
+                        if not attendance_id:
+                            await websocket.send_json({"status": "error", "message": "No attendance ID provided"})
+                            continue
+                        
+                        # Find the attendance record
+                        attendance = db.query(models.Attendance).filter(models.Attendance.id == attendance_id).first()
+                        if not attendance:
+                            await websocket.send_json({"status": "error", "message": "Attendance record not found"})
+                            continue
+                        
+                        # Store user info before deletion for broadcasting
+                        user_id = attendance.user_id
+                        user = db.query(models.User).filter(models.User.user_id == user_id).first()
+                        user_name = user.name if user else "Unknown"
+                        
+                        # Delete the attendance record
+                        db.delete(attendance)
+                        db.commit()
+                        
+                        # Create attendance update for broadcasting
+                        attendance_update = {
+                            "action": "delete",
+                            "user_id": user_id,
+                            "name": user_name,
+                            "attendance_id": attendance_id,
+                            "timestamp": get_local_time().isoformat()
+                        }
+                        
+                        # Add the update to the processing results queue
+                        processing_results_queue.put({
+                            "type": "attendance_update",
+                            "data": [attendance_update]
+                        })
+                        
+                        await websocket.send_json({"status": "success", "message": "Attendance record deleted successfully"})
+                        continue
+                    
+                    # Check if this is a request to delete user
+                    if json_data.get("type") == "delete_user":
+                        user_id = json_data.get("user_id")
+                        if not user_id:
+                            await websocket.send_json({"status": "error", "message": "No user ID provided"})
+                            continue
+                        
+                        # Find the user
+                        user = db.query(models.User).filter(models.User.user_id == user_id).first()
+                        if not user:
+                            await websocket.send_json({"status": "error", "message": "User not found"})
+                            continue
+                        
+                        # Delete the user
+                        db.delete(user)
+                        db.commit()
+                        
+                        await websocket.send_json({"status": "success", "message": "User deleted successfully"})
+                        continue
+                    
+                    # Check if this is a request to register a user
+                    if json_data.get("type") == "register_user":
+                        user_id = json_data.get("user_id")
+                        name = json_data.get("name")
+                        image_data = json_data.get("image")
+                        
+                        if not user_id or not name or not image_data:
+                            await websocket.send_json({"status": "error", "message": "Missing required fields"})
+                            continue
+                        
+                        # Check if user already exists
+                        existing_user = db.query(models.User).filter(models.User.user_id == user_id).first()
+                        if existing_user:
+                            await websocket.send_json({"status": "error", "message": "User ID already registered"})
+                            continue
+                        
+                        # Process the image
+                        try:
+                            # Remove data URL prefix if present
+                            if "," in image_data:
+                                image_data = image_data.split(",")[1]
+                            
+                            # Decode base64 to bytes
+                            image_bytes = base64.b64decode(image_data)
+                            
+                            # Convert to numpy array
+                            nparr = np.frombuffer(image_bytes, np.uint8)
+                            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            
+                            if img is None:
+                                await websocket.send_json({"status": "error", "message": "Invalid image data"})
+                                continue
+                            
+                            # Get face embedding
+                            embedding = face_recognition.get_embedding(img)
+                            if embedding is None:
+                                await websocket.send_json({"status": "error", "message": "No face detected in image"})
+                                continue
+                            
+                            # Create new user
+                            new_user = models.User(
+                                user_id=user_id,
+                                name=name,
+                                embedding=face_recognition.embedding_to_str(embedding)
+                            )
+                            db.add(new_user)
+                            db.commit()
+                            
+                            await websocket.send_json({"status": "success", "message": "User registered successfully"})
+                        except Exception as e:
+                            logger.error(f"Error registering user: {str(e)}")
+                            await websocket.send_json({"status": "error", "message": f"Error registering user: {str(e)}"})
+                        continue
+                    
+                    # If we get here, this is an image for processing
                     image_data = json_data.get("image")
                     entry_type = json_data.get("entry_type", "entry")  # Default to entry if not specified
                     
@@ -374,6 +666,21 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Send acknowledgment but don't disconnect
                         await websocket.send_json({"status": "no_image_data"})
                         continue
+                    
+                    # Save the frame
+                    save_frame(image_data, prefix=f"frame_{entry_type}")
+                    
+                    # Implement rate limiting - only process one frame per second
+                    current_time = time.time()
+                    time_since_last_frame = current_time - last_frame_time
+                    
+                    # if time_since_last_frame < 1.0 / MAX_FRAMES_PER_SECOND:
+                    #     # Skip this frame
+                    #     await websocket.send_json({"status": "rate_limited"})
+                    #     continue
+                    
+                    # Update the last frame time
+                    last_frame_time = current_time
                     
                     # Submit image processing to thread pool
                     future = thread_pool.submit(
@@ -385,30 +692,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         no_face_count
                     )
                     
-                    # Wait for the result
-                    processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
+                    # Add callback to handle completion
+                    future.add_done_callback(lambda f: handle_future_completion(f, websocket))
                     
-                    # Handle the results
-                    if not processed_users:
-                        if no_face_count > 0:
-                            # No face detected, send acknowledgment but don't disconnect
-                            await websocket.send_json({"status": "no_face_detected"})
-                            continue
-                        else:
-                            # No matching users found, send acknowledgment but don't disconnect
-                            await websocket.send_json({"status": "no_matching_users"})
-                            continue
+                    # Store the future for cleanup if needed
+                    pending_futures[websocket] = future
                     
-                    # Send response with all processed users to the current client
-                    await websocket.send_json({
-                        "multiple_users": True,
-                        "users": processed_users
-                    })
-                    
-                    # Broadcast attendance updates to all connected clients
-                    if attendance_updates:
-                        logger.info(f"Broadcasting {len(attendance_updates)} attendance updates")
-                        await broadcast_attendance_update(attendance_updates)
+                    # Continue processing other frames without waiting
+                    continue
                 
                 except json.JSONDecodeError:
                     # Invalid JSON, send acknowledgment but don't disconnect
@@ -455,6 +746,13 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in active_connections:
             active_connections.remove(websocket)
             logger.info(f"WebSocket disconnected. Remaining connections: {len(active_connections)}")
+            
+            # Cancel any pending futures for this websocket
+            if websocket in pending_futures:
+                future = pending_futures[websocket]
+                future.cancel()
+                del pending_futures[websocket]
+        
         # Close the database session
         try:
             db.close()
@@ -471,6 +769,13 @@ async def mark_attendance(
     contents = await image.read()
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    # Save the frame
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    filename = f"rest_api_{entry_type}_{timestamp}.jpg"
+    filepath = os.path.join(IMAGES_DIR, filename)
+    cv2.imwrite(filepath, img)
+    logger.info(f"Saved REST API frame to {filepath}")
     
     # Get all face embeddings from the image
     face_embeddings = face_recognition.get_embeddings(img)
@@ -703,4 +1008,40 @@ async def debug_face_recognition(
         },
         "all_similarities": all_similarities,
         "match_found": best_match is not None and best_similarity >= threshold
-    } 
+    }
+
+# Function to save a frame to the images folder
+def save_frame(image_data, prefix="frame"):
+    """Save a frame to the images folder with a timestamp"""
+    try:
+        # Remove data URL prefix if present
+        if "," in image_data:
+            image_data = image_data.split(",")[1]
+        
+        # Decode base64 to bytes
+        image_bytes = base64.b64decode(image_data)
+        
+        # Convert to numpy array
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            logger.error("Failed to decode image data")
+            return False
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{prefix}_{timestamp}.jpg"
+        filepath = os.path.join(IMAGES_DIR, filename)
+        
+        # Save the image
+        success = cv2.imwrite(filepath, img)
+        if success:
+            logger.info(f"Saved frame to {filepath}")
+            return True
+        else:
+            logger.error(f"Failed to save frame to {filepath}")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving frame: {str(e)}")
+        return False 

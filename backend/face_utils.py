@@ -15,7 +15,7 @@ class FaceRecognition:
             logger.info("Initializing FaceRecognition with buffalo_l model")
             self.app = FaceAnalysis(name='buffalo_l')
             self.app.prepare(ctx_id=0, det_size=(640, 640))
-            self.threshold = 0.6 # Cosine similarity threshold for matching
+            self.threshold = 0.5 # Cosine similarity threshold for matching
             logger.info("FaceRecognition initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing FaceRecognition: {str(e)}")
