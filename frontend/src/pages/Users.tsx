@@ -6,10 +6,17 @@ import {
   Typography,
   CircularProgress,
   Alert,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
 } from '@mui/material';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
+import { DataGrid, GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import { format } from 'date-fns';
 import axios from 'axios';
+import { Delete as DeleteIcon } from '@mui/icons-material';
 
 interface User {
   user_id: string;
@@ -21,6 +28,9 @@ export default function Users() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const columns: GridColDef[] = [
     {
@@ -39,6 +49,22 @@ export default function Users() {
       width: 200,
       valueFormatter: (params) => format(new Date(params.value), 'PPpp'),
     },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 120,
+      renderCell: (params: GridRenderCellParams) => (
+        <Button
+          variant="outlined"
+          color="error"
+          size="small"
+          startIcon={<DeleteIcon />}
+          onClick={() => handleDeleteClick(params.row)}
+        >
+          Delete
+        </Button>
+      ),
+    },
   ];
 
   const fetchUsers = async () => {
@@ -51,6 +77,32 @@ export default function Users() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDeleteClick = (user: User) => {
+    setUserToDelete(user);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!userToDelete) return;
+    
+    setDeleteLoading(true);
+    try {
+      await axios.delete(`/api/users/${userToDelete.user_id}`);
+      setDeleteDialogOpen(false);
+      fetchUsers(); // Refresh the user list
+    } catch (err) {
+      setError('Failed to delete user');
+    } finally {
+      setDeleteLoading(false);
+      setUserToDelete(null);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteDialogOpen(false);
+    setUserToDelete(null);
   };
 
   useEffect(() => {
@@ -95,6 +147,33 @@ export default function Users() {
           )}
         </CardContent>
       </Card>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={handleDeleteCancel}
+      >
+        <DialogTitle>Delete User</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to delete user {userToDelete?.name} ({userToDelete?.user_id})? This action cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeleteCancel} disabled={deleteLoading}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleDeleteConfirm} 
+            color="error" 
+            variant="contained"
+            disabled={deleteLoading}
+            startIcon={deleteLoading ? <CircularProgress size={20} color="inherit" /> : null}
+          >
+            {deleteLoading ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 } 

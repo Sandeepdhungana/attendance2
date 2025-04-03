@@ -262,6 +262,20 @@ def get_attendance(db: Session = Depends(get_db)):
         for att in attendances
     ]
 
+@app.delete("/attendance/{attendance_id}")
+def delete_attendance(attendance_id: int, db: Session = Depends(get_db)):
+    # Find the attendance record
+    attendance = db.query(models.Attendance).filter(models.Attendance.id == attendance_id).first()
+    if not attendance:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    
+    # Delete the attendance record
+    db.delete(attendance)
+    db.commit()
+    
+    logger.info(f"Attendance record deleted successfully: ID {attendance_id}")
+    return {"message": "Attendance record deleted successfully"}
+
 @app.get("/users")
 def get_users(db: Session = Depends(get_db)):
     users = db.query(models.User).all()
@@ -273,6 +287,20 @@ def get_users(db: Session = Depends(get_db)):
         }
         for user in users
     ]
+
+@app.delete("/users/{user_id}")
+def delete_user(user_id: str, db: Session = Depends(get_db)):
+    # Find the user
+    user = db.query(models.User).filter(models.User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Delete the user
+    db.delete(user)
+    db.commit()
+    
+    logger.info(f"User deleted successfully: {user_id}")
+    return {"message": "User deleted successfully"}
 
 @app.post("/debug/face-recognition")
 async def debug_face_recognition(
