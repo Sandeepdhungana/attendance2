@@ -82,7 +82,10 @@ export default function Dashboard() {
       field: 'timestamp',
       headerName: 'Time',
       width: 200,
-      valueFormatter: (params) => format(new Date(params.value), 'PPpp'),
+      valueFormatter: (params) => {
+        const date = new Date(params.value);
+        return format(date, 'PPpp');
+      },
     },
     {
       field: 'confidence',

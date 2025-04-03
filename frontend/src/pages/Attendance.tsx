@@ -9,13 +9,18 @@ import {
   Alert,
   Switch,
   FormControlLabel,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import Webcam from 'react-webcam';
 import axios from 'axios';
+import { Login as LoginIcon, Logout as LogoutIcon } from '@mui/icons-material';
+import { format } from 'date-fns';
 
 export default function Attendance() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [entryType, setEntryType] = useState<'entry' | 'exit'>('entry');
   const [message, setMessage] = useState<{ type: 'success' | 'error' | null; text: string }>({
     type: null,
     text: '',
@@ -37,66 +42,69 @@ export default function Attendance() {
   }, []);
 
   const startStreaming = useCallback(() => {
-    if (!webcamRef.current) return;
-
-    // Create WebSocket connection
-    const ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/attendance`);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log('WebSocket connection established');
+    if (webcamRef.current) {
       setIsStreaming(true);
       setMessage({ type: null, text: '' });
-    };
 
-    ws.onmessage = (event) => {
-      try {
-        const response = JSON.parse(event.data);
-        
-        if (response.error) {
+      // Create WebSocket connection
+      const ws = new WebSocket('ws://localhost:8000/ws/attendance');
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('WebSocket connection established');
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.error) {
           setMessage({
             type: 'error',
-            text: response.error,
+            text: data.error,
           });
         } else {
+          // Format the timestamp in local time zone if it exists in the response
+          let messageText = `${data.message}: ${data.name} (${data.user_id})`;
+          if (data.timestamp) {
+            const localTime = format(new Date(data.timestamp), 'PPpp');
+            messageText += ` at ${localTime}`;
+          }
+
           setMessage({
             type: 'success',
-            text: `${response.message} for ${response.name} (${response.user_id})`,
+            text: messageText,
           });
         }
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
-      }
-    };
+      };
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setMessage({
-        type: 'error',
-        text: 'WebSocket connection error',
-      });
-      setIsStreaming(false);
-    };
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setMessage({
+          type: 'error',
+          text: 'WebSocket connection error',
+        });
+      };
 
-    ws.onclose = () => {
-      console.log('WebSocket connection closed');
-      setIsStreaming(false);
-      if (streamIntervalRef.current) {
-        window.clearInterval(streamIntervalRef.current);
-        streamIntervalRef.current = null;
-      }
-    };
+      ws.onclose = () => {
+        console.log('WebSocket connection closed');
+        setIsStreaming(false);
+      };
 
-    // Start sending images at regular intervals
-    streamIntervalRef.current = window.setInterval(() => {
-      if (webcamRef.current && ws.readyState === WebSocket.OPEN) {
-        const imageSrc = webcamRef.current.getScreenshot();
-        if (imageSrc) {
-          ws.send(JSON.stringify({ image: imageSrc }));
+      // Set up interval to send images
+      const interval = window.setInterval(() => {
+        if (webcamRef.current && ws.readyState === WebSocket.OPEN) {
+          const imageSrc = webcamRef.current.getScreenshot();
+          if (imageSrc) {
+            ws.send(JSON.stringify({ 
+              image: imageSrc,
+              entry_type: entryType 
+            }));
+          }
         }
-      }
-    }, 1000); // Send an image every second
-  }, [webcamRef]);
+      }, 1000); // Send image every second
+
+      streamIntervalRef.current = interval;
+    }
+  }, [webcamRef, entryType]);
 
   const stopStreaming = useCallback(() => {
     if (wsRef.current) {
@@ -130,17 +138,25 @@ export default function Attendance() {
         // Create form data
         const formData = new FormData();
         formData.append('image', blob, 'capture.jpg');
+        formData.append('entry_type', entryType);
 
         // Send to backend
-        const response = await axios.post('http://localhost:8000/attendance', formData, {
+        const response = await axios.post('/api/attendance', formData, {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
         });
 
+        // Format the timestamp in local time zone if it exists in the response
+        let messageText = `${response.data.message}: ${response.data.name} (${response.data.user_id})`;
+        if (response.data.timestamp) {
+          const localTime = format(new Date(response.data.timestamp), 'PPpp');
+          messageText += ` at ${localTime}`;
+        }
+
         setMessage({
           type: 'success',
-          text: `Attendance marked for ${response.data.name} (${response.data.user_id})`,
+          text: messageText,
         });
       } catch (error) {
         setMessage({
@@ -151,7 +167,38 @@ export default function Attendance() {
         setIsCapturing(false);
       }
     }
-  }, [webcamRef]);
+  }, [webcamRef, entryType]);
+
+  const handleEntryTypeChange = (
+    event: React.MouseEvent<HTMLElement>,
+    newEntryType: 'entry' | 'exit' | null,
+  ) => {
+    if (newEntryType !== null) {
+      setEntryType(newEntryType);
+    }
+  };
+
+  const handleWebSocketMessage = (event: MessageEvent) => {
+    const data = JSON.parse(event.data);
+    if (data.error) {
+      setMessage({
+        type: 'error',
+        text: data.error,
+      });
+    } else {
+      // Format the timestamp in local time zone if it exists in the response
+      let messageText = `${data.message}: ${data.name} (${data.user_id})`;
+      if (data.timestamp) {
+        const localTime = format(new Date(data.timestamp), 'PPpp');
+        messageText += ` at ${localTime}`;
+      }
+
+      setMessage({
+        type: 'success',
+        text: messageText,
+      });
+    }
+  };
 
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto' }}>
@@ -193,14 +240,32 @@ export default function Attendance() {
             )}
           </Box>
 
-          <Box sx={{ mt: 2, textAlign: 'center', display: 'flex', justifyContent: 'center', gap: 2 }}>
+          <Box sx={{ mt: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+            <ToggleButtonGroup
+              value={entryType}
+              exclusive
+              onChange={handleEntryTypeChange}
+              aria-label="entry type"
+              sx={{ mb: 2 }}
+            >
+              <ToggleButton value="entry" aria-label="entry">
+                <LoginIcon sx={{ mr: 1 }} />
+                Entry
+              </ToggleButton>
+              <ToggleButton value="exit" aria-label="exit">
+                <LogoutIcon sx={{ mr: 1 }} />
+                Exit
+              </ToggleButton>
+            </ToggleButtonGroup>
+            
             <Button
               variant="contained"
               onClick={capture}
               disabled={isCapturing || isStreaming}
               size="large"
+              color={entryType === 'entry' ? 'primary' : 'secondary'}
             >
-              {isCapturing ? 'Processing...' : 'Mark Attendance'}
+              {isCapturing ? 'Processing...' : `Mark ${entryType === 'entry' ? 'Entry' : 'Exit'}`}
             </Button>
             
             <FormControlLabel

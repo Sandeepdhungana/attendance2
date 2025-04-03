@@ -1,7 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 import cv2
 import numpy as np
 from typing import List
@@ -9,6 +9,7 @@ import base64
 import json
 import asyncio
 import logging
+import pytz
 
 import models
 import database
@@ -36,6 +37,21 @@ app.add_middleware(
 
 # Store active WebSocket connections
 active_connections: List[WebSocket] = []
+
+# Get local timezone
+try:
+    local_tz = pytz.timezone('Asia/Kolkata')  # Default to IST, can be changed based on your location
+except:
+    # Fallback if pytz is not available
+    local_tz = timezone(timedelta(hours=5, minutes=30))  # IST offset as fallback
+
+def get_local_time():
+    """Get current time in local timezone"""
+    return datetime.now(local_tz)
+
+def get_local_date():
+    """Get current date in local timezone"""
+    return get_local_time().date()
 
 @app.post("/register")
 async def register_user(
@@ -89,6 +105,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Parse the JSON data
                 json_data = json.loads(data)
                 image_data = json_data.get("image")
+                entry_type = json_data.get("entry_type", "entry")  # Default to entry if not specified
                 
                 if not image_data:
                     await websocket.send_json({"error": "No image data received"})
@@ -137,32 +154,52 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
                     
                     # Check if attendance already marked for today
-                    today = date.today()
+                    today = get_local_date()
                     existing_attendance = db.query(models.Attendance).filter(
                         models.Attendance.user_id == best_match.user_id,
                         models.Attendance.timestamp >= today
                     ).first()
                     
-                    if existing_attendance:
-                        await websocket.send_json({
-                            "message": "Attendance already marked for today",
-                            "user_id": best_match.user_id,
-                            "name": best_match.name
-                        })
-                    else:
-                        # Mark attendance
-                        new_attendance = models.Attendance(
-                            user_id=best_match.user_id,
-                            confidence=best_similarity  # Use similarity directly as confidence
-                        )
-                        db.add(new_attendance)
-                        db.commit()
-                        
-                        await websocket.send_json({
-                            "message": "Attendance marked successfully",
-                            "user_id": best_match.user_id,
-                            "name": best_match.name
-                        })
+                    if entry_type == "entry":
+                        if existing_attendance:
+                            await websocket.send_json({
+                                "message": "Attendance already marked for today",
+                                "user_id": best_match.user_id,
+                                "name": best_match.name,
+                                "timestamp": existing_attendance.timestamp.isoformat()
+                            })
+                        else:
+                            # Mark attendance
+                            new_attendance = models.Attendance(
+                                user_id=best_match.user_id,
+                                confidence=best_similarity  # Use similarity directly as confidence
+                            )
+                            db.add(new_attendance)
+                            db.commit()
+                            
+                            await websocket.send_json({
+                                "message": "Attendance marked successfully",
+                                "user_id": best_match.user_id,
+                                "name": best_match.name,
+                                "timestamp": new_attendance.timestamp.isoformat()
+                            })
+                    else:  # exit
+                        if not existing_attendance:
+                            await websocket.send_json({
+                                "message": "No attendance record found for today",
+                                "user_id": best_match.user_id,
+                                "name": best_match.name
+                            })
+                        else:
+                            # Delete the attendance record
+                            db.delete(existing_attendance)
+                            db.commit()
+                            
+                            await websocket.send_json({
+                                "message": "Attendance exit recorded successfully",
+                                "user_id": best_match.user_id,
+                                "name": best_match.name
+                            })
                 
                 except Exception as e:
                     logger.error(f"Error processing image: {str(e)}")
@@ -188,6 +225,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/attendance")
 async def mark_attendance(
     image: UploadFile = File(...),
+    entry_type: str = Form("entry"),  # Default to entry if not specified
     db: Session = Depends(get_db)
 ):
     # Read and decode image
@@ -222,32 +260,52 @@ async def mark_attendance(
         )
     
     # Check if attendance already marked for today
-    today = date.today()
+    today = get_local_date()
     existing_attendance = db.query(models.Attendance).filter(
         models.Attendance.user_id == best_match.user_id,
         models.Attendance.timestamp >= today
     ).first()
     
-    if existing_attendance:
+    if entry_type == "entry":
+        if existing_attendance:
+            return {
+                "message": "Attendance already marked for today",
+                "user_id": best_match.user_id,
+                "name": best_match.name,
+                "timestamp": existing_attendance.timestamp.isoformat()
+            }
+        
+        # Mark attendance
+        new_attendance = models.Attendance(
+            user_id=best_match.user_id,
+            confidence=best_similarity  # Use similarity directly as confidence
+        )
+        db.add(new_attendance)
+        db.commit()
+        
         return {
-            "message": "Attendance already marked for today",
+            "message": "Attendance marked successfully",
+            "user_id": best_match.user_id,
+            "name": best_match.name,
+            "timestamp": new_attendance.timestamp.isoformat()
+        }
+    else:  # exit
+        if not existing_attendance:
+            return {
+                "message": "No attendance record found for today",
+                "user_id": best_match.user_id,
+                "name": best_match.name
+            }
+        
+        # Delete the attendance record
+        db.delete(existing_attendance)
+        db.commit()
+        
+        return {
+            "message": "Attendance exit recorded successfully",
             "user_id": best_match.user_id,
             "name": best_match.name
         }
-    
-    # Mark attendance
-    new_attendance = models.Attendance(
-        user_id=best_match.user_id,
-        confidence=best_similarity  # Use similarity directly as confidence
-    )
-    db.add(new_attendance)
-    db.commit()
-    
-    return {
-        "message": "Attendance marked successfully",
-        "user_id": best_match.user_id,
-        "name": best_match.name
-    }
 
 @app.get("/attendance")
 def get_attendance(db: Session = Depends(get_db)):
