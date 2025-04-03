@@ -11,11 +11,33 @@ import {
   FormControlLabel,
   ToggleButton,
   ToggleButtonGroup,
+  List,
+  ListItem,
+  ListItemText,
+  Divider,
 } from '@mui/material';
 import Webcam from 'react-webcam';
 import axios from 'axios';
-import { Login as LoginIcon, Logout as LogoutIcon } from '@mui/icons-material';
+import { Login as LoginIcon, Logout as LogoutIcon, CloudUpload as CloudUploadIcon } from '@mui/icons-material';
 import { format } from 'date-fns';
+
+interface UserResult {
+  message: string;
+  user_id: string;
+  name: string;
+  timestamp?: string;
+  similarity: number;
+}
+
+interface WebSocketResponse {
+  multiple_users?: boolean;
+  users?: UserResult[];
+  error?: string;
+  message?: string;
+  user_id?: string;
+  name?: string;
+  timestamp?: string;
+}
 
 export default function Attendance() {
   const [isCapturing, setIsCapturing] = useState(false);
@@ -25,9 +47,17 @@ export default function Attendance() {
     type: null,
     text: '',
   });
+  const [multipleUsers, setMultipleUsers] = useState<UserResult[]>([]);
+  const [faceCount, setFaceCount] = useState<number>(0);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoPreview, setVideoPreview] = useState<string>('');
+  const [isVideoMode, setIsVideoMode] = useState(false);
   const webcamRef = useRef<Webcam>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const streamIntervalRef = useRef<number | null>(null);
+  const streamIntervalRef = useRef<number | object | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const isStreamingRef = useRef<boolean>(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   // Clean up WebSocket connection on component unmount
   useEffect(() => {
@@ -35,9 +65,10 @@ export default function Attendance() {
       if (wsRef.current) {
         wsRef.current.close();
       }
-      if (streamIntervalRef.current) {
-        window.clearInterval(streamIntervalRef.current);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
+      isStreamingRef.current = false;
     };
   }, []);
 
@@ -45,6 +76,8 @@ export default function Attendance() {
     if (webcamRef.current) {
       setIsStreaming(true);
       setMessage({ type: null, text: '' });
+      setMultipleUsers([]);
+      setFaceCount(0);
 
       // Create WebSocket connection
       const ws = new WebSocket('ws://localhost:8000/ws/attendance');
@@ -55,14 +88,39 @@ export default function Attendance() {
       };
 
       ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+        const data: WebSocketResponse = JSON.parse(event.data);
+        
         if (data.error) {
           setMessage({
             type: 'error',
             text: data.error,
           });
+          setMultipleUsers([]);
+          setFaceCount(0);
+        } else if (data.multiple_users && data.users) {
+          // Handle multiple users
+          setMultipleUsers(data.users);
+          setFaceCount(data.users.length);
+          
+          // Create a summary message
+          const successCount = data.users.filter(u => 
+            u.message.includes('successfully') || 
+            u.message.includes('already marked')
+          ).length;
+          
+          if (successCount > 0) {
+            setMessage({
+              type: 'success',
+              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
+            });
+          } else {
+            setMessage({
+              type: 'error',
+              text: 'No users were processed successfully',
+            });
+          }
         } else {
-          // Format the timestamp in local time zone if it exists in the response
+          // Handle single user (legacy format)
           let messageText = `${data.message}: ${data.name} (${data.user_id})`;
           if (data.timestamp) {
             const localTime = format(new Date(data.timestamp), 'PPpp');
@@ -73,6 +131,8 @@ export default function Attendance() {
             type: 'success',
             text: messageText,
           });
+          setMultipleUsers([]);
+          setFaceCount(1);
         }
       };
 
@@ -87,10 +147,15 @@ export default function Attendance() {
       ws.onclose = () => {
         console.log('WebSocket connection closed');
         setIsStreaming(false);
+        isStreamingRef.current = false;
       };
 
-      // Set up interval to send images
-      const interval = window.setInterval(() => {
+      // Set up continuous streaming using requestAnimationFrame
+      isStreamingRef.current = true;
+      
+      const streamFrame = () => {
+        if (!isStreamingRef.current) return;
+        
         if (webcamRef.current && ws.readyState === WebSocket.OPEN) {
           const imageSrc = webcamRef.current.getScreenshot();
           if (imageSrc) {
@@ -100,9 +165,13 @@ export default function Attendance() {
             }));
           }
         }
-      }, 1000); // Send image every second
-
-      streamIntervalRef.current = interval;
+        
+        // Request the next frame
+        animationFrameRef.current = requestAnimationFrame(streamFrame);
+      };
+      
+      // Start the streaming loop
+      animationFrameRef.current = requestAnimationFrame(streamFrame);
     }
   }, [webcamRef, entryType]);
 
@@ -112,11 +181,12 @@ export default function Attendance() {
       wsRef.current = null;
     }
     
-    if (streamIntervalRef.current) {
-      window.clearInterval(streamIntervalRef.current);
-      streamIntervalRef.current = null;
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
     
+    isStreamingRef.current = false;
     setIsStreaming(false);
   }, []);
 
@@ -124,6 +194,8 @@ export default function Attendance() {
     if (webcamRef.current) {
       setIsCapturing(true);
       setMessage({ type: null, text: '' });
+      setMultipleUsers([]);
+      setFaceCount(0);
 
       try {
         const imageSrc = webcamRef.current.getScreenshot();
@@ -147,17 +219,44 @@ export default function Attendance() {
           },
         });
 
-        // Format the timestamp in local time zone if it exists in the response
-        let messageText = `${response.data.message}: ${response.data.name} (${response.data.user_id})`;
-        if (response.data.timestamp) {
-          const localTime = format(new Date(response.data.timestamp), 'PPpp');
-          messageText += ` at ${localTime}`;
-        }
+        const data = response.data;
+        
+        if (data.multiple_users && data.users) {
+          // Handle multiple users
+          setMultipleUsers(data.users);
+          setFaceCount(data.users.length);
+          
+          // Create a summary message
+          const successCount = data.users.filter(u => 
+            u.message.includes('successfully') || 
+            u.message.includes('already marked')
+          ).length;
+          
+          if (successCount > 0) {
+            setMessage({
+              type: 'success',
+              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
+            });
+          } else {
+            setMessage({
+              type: 'error',
+              text: 'No users were processed successfully',
+            });
+          }
+        } else {
+          // Handle single user (legacy format)
+          let messageText = `${data.message}: ${data.name} (${data.user_id})`;
+          if (data.timestamp) {
+            const localTime = format(new Date(data.timestamp), 'PPpp');
+            messageText += ` at ${localTime}`;
+          }
 
-        setMessage({
-          type: 'success',
-          text: messageText,
-        });
+          setMessage({
+            type: 'success',
+            text: messageText,
+          });
+          setFaceCount(1);
+        }
       } catch (error) {
         setMessage({
           type: 'error',
@@ -178,48 +277,163 @@ export default function Attendance() {
     }
   };
 
-  const handleWebSocketMessage = (event: MessageEvent) => {
-    const data = JSON.parse(event.data);
-    if (data.error) {
-      setMessage({
-        type: 'error',
-        text: data.error,
-      });
-    } else {
-      // Format the timestamp in local time zone if it exists in the response
-      let messageText = `${data.message}: ${data.name} (${data.user_id})`;
-      if (data.timestamp) {
-        const localTime = format(new Date(data.timestamp), 'PPpp');
-        messageText += ` at ${localTime}`;
-      }
-
-      setMessage({
-        type: 'success',
-        text: messageText,
-      });
+  const handleVideoChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setVideoFile(file);
+      const url = URL.createObjectURL(file);
+      setVideoPreview(url);
+      setIsVideoMode(true);
     }
   };
 
+  const startVideoStream = useCallback(() => {
+    if (videoRef.current && videoFile) {
+      setIsStreaming(true);
+      setMessage({ type: null, text: '' });
+      setMultipleUsers([]);
+      setFaceCount(0);
+
+      // Create WebSocket connection
+      const ws = new WebSocket('ws://localhost:8000/ws/attendance');
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('WebSocket connection established');
+      };
+
+      ws.onmessage = (event) => {
+        const data: WebSocketResponse = JSON.parse(event.data);
+        
+        if (data.error) {
+          setMessage({
+            type: 'error',
+            text: data.error,
+          });
+          setMultipleUsers([]);
+          setFaceCount(0);
+        } else if (data.multiple_users && data.users) {
+          setMultipleUsers(data.users);
+          setFaceCount(data.users.length);
+          
+          const successCount = data.users.filter(u => 
+            u.message.includes('successfully') || 
+            u.message.includes('already marked')
+          ).length;
+          
+          if (successCount > 0) {
+            setMessage({
+              type: 'success',
+              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
+            });
+          } else {
+            setMessage({
+              type: 'error',
+              text: 'No users were processed successfully',
+            });
+          }
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setMessage({
+          type: 'error',
+          text: 'WebSocket connection error',
+        });
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket connection closed');
+        setIsStreaming(false);
+        isStreamingRef.current = false;
+      };
+
+      // Set up video streaming
+      isStreamingRef.current = true;
+      
+      const streamFrame = () => {
+        if (!isStreamingRef.current) return;
+        
+        if (videoRef.current && ws.readyState === WebSocket.OPEN) {
+          // Check if video has ended
+          if (videoRef.current.ended) {
+            stopStreaming();
+            return;
+          }
+          
+          const canvas = document.createElement('canvas');
+          canvas.width = videoRef.current.videoWidth;
+          canvas.height = videoRef.current.videoHeight;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(videoRef.current, 0, 0);
+            const imageSrc = canvas.toDataURL('image/jpeg');
+            ws.send(JSON.stringify({ 
+              image: imageSrc,
+              entry_type: entryType 
+            }));
+          }
+        }
+        
+        animationFrameRef.current = requestAnimationFrame(streamFrame);
+      };
+      
+      // Add event listener for video end
+      const handleVideoEnd = () => {
+        stopStreaming();
+      };
+      
+      videoRef.current.addEventListener('ended', handleVideoEnd);
+      
+      // Start the video and streaming
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0; // Reset to beginning
+        videoRef.current.play();
+      }
+      
+      animationFrameRef.current = requestAnimationFrame(streamFrame);
+      
+      // Clean up event listener when streaming stops
+      return () => {
+        if (videoRef.current) {
+          videoRef.current.removeEventListener('ended', handleVideoEnd);
+        }
+      };
+    }
+  }, [videoFile, entryType, stopStreaming]);
+
   return (
-    <Box sx={{ maxWidth: 800, mx: 'auto' }}>
+    <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
       <Typography variant="h4" gutterBottom>
-        Mark Attendance
+        Face Attendance
       </Typography>
 
       <Card sx={{ mb: 3 }}>
         <CardContent>
-          <Box sx={{ position: 'relative', width: '100%', maxWidth: 640, mx: 'auto' }}>
-            <Webcam
-              ref={webcamRef}
-              audio={false}
-              screenshotFormat="image/jpeg"
-              videoConstraints={{
-                width: 640,
-                height: 480,
-                facingMode: 'user',
-              }}
-              style={{ width: '100%', borderRadius: 8 }}
-            />
+          <Box sx={{ position: 'relative', mb: 2 }}>
+            {!isVideoMode ? (
+              <Webcam
+                ref={webcamRef}
+                audio={false}
+                screenshotFormat="image/jpeg"
+                videoConstraints={{
+                  width: 640,
+                  height: 480,
+                  facingMode: 'user',
+                }}
+                style={{ width: '100%', borderRadius: 8 }}
+              />
+            ) : (
+              <video
+                ref={videoRef}
+                src={videoPreview}
+                style={{ width: '100%', borderRadius: 8 }}
+                controls
+                autoPlay
+                muted
+              />
+            )}
             {(isCapturing || isStreaming) && (
               <Box
                 sx={{
@@ -238,15 +452,36 @@ export default function Attendance() {
                 <CircularProgress color="primary" />
               </Box>
             )}
+            
+            {/* Face count indicator */}
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                color: 'white',
+                borderRadius: '50%',
+                width: 40,
+                height: 40,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 'bold',
+                fontSize: '1.2rem',
+                zIndex: 10,
+              }}
+            >
+              {faceCount}
+            </Box>
           </Box>
 
-          <Box sx={{ mt: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mb: 2 }}>
             <ToggleButtonGroup
               value={entryType}
               exclusive
               onChange={handleEntryTypeChange}
               aria-label="entry type"
-              sx={{ mb: 2 }}
             >
               <ToggleButton value="entry" aria-label="entry">
                 <LoginIcon sx={{ mr: 1 }} />
@@ -257,43 +492,88 @@ export default function Attendance() {
                 Exit
               </ToggleButton>
             </ToggleButtonGroup>
-            
+          </Box>
+
+          <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mb: 2 }}>
+            <input
+              type="file"
+              accept="video/*"
+              onChange={handleVideoChange}
+              style={{ display: 'none' }}
+              id="video-upload"
+            />
+            <label htmlFor="video-upload">
+              <Button
+                variant="outlined"
+                component="span"
+                startIcon={<CloudUploadIcon />}
+              >
+                Upload Video
+              </Button>
+            </label>
             <Button
               variant="contained"
-              onClick={capture}
-              disabled={isCapturing || isStreaming}
-              size="large"
               color={entryType === 'entry' ? 'primary' : 'secondary'}
+              onClick={isVideoMode ? startVideoStream : capture}
+              disabled={isCapturing || isStreaming || (!isVideoMode && !webcamRef.current) || (isVideoMode && !videoFile)}
+              startIcon={entryType === 'entry' ? <LoginIcon /> : <LogoutIcon />}
             >
-              {isCapturing ? 'Processing...' : `Mark ${entryType === 'entry' ? 'Entry' : 'Exit'}`}
+              {isCapturing ? 'Processing...' : `Capture ${entryType === 'entry' ? 'Entry' : 'Exit'}`}
             </Button>
-            
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={isStreaming}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      startStreaming();
-                    } else {
-                      stopStreaming();
-                    }
-                  }}
-                  color="primary"
-                />
-              }
-              label="Continuous Mode"
-            />
+            {!isVideoMode && (
+              <Button
+                variant="outlined"
+                onClick={isStreaming ? stopStreaming : startStreaming}
+                color={isStreaming ? 'error' : 'primary'}
+              >
+                {isStreaming ? 'Stop Streaming' : 'Start Streaming'}
+              </Button>
+            )}
           </Box>
 
           {message.type && (
-            <Alert
-              severity={message.type}
-              sx={{ mt: 2 }}
-              onClose={() => setMessage({ type: null, text: '' })}
-            >
+            <Alert severity={message.type} sx={{ mb: 2 }}>
               {message.text}
             </Alert>
+          )}
+
+          {multipleUsers.length > 0 && (
+            <Card variant="outlined" sx={{ mt: 2 }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Detected Users ({multipleUsers.length})
+                </Typography>
+                <List>
+                  {multipleUsers.map((user, index) => (
+                    <div key={`${user.user_id}-${index}`}>
+                      <ListItem>
+                        <ListItemText
+                          primary={`${user.name} (${user.user_id})`}
+                          secondary={
+                            <>
+                              <Typography component="span" variant="body2" color="text.primary">
+                                {user.message}
+                              </Typography>
+                              {user.timestamp && (
+                                <Typography component="span" variant="body2" color="text.secondary">
+                                  {' at '}
+                                  {format(new Date(user.timestamp), 'PPpp')}
+                                </Typography>
+                              )}
+                              <Typography component="span" variant="body2" color="text.secondary">
+                                {' • Confidence: '}
+                                {(user.similarity * 100).toFixed(1)}%
+                              </Typography>
+                            </>
+                          }
+                        />
+                      </ListItem>
+                      {index < multipleUsers.length - 1 && <Divider />}
+                    </div>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
           )}
         </CardContent>
       </Card>

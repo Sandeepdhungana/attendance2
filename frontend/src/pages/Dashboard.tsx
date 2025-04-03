@@ -233,7 +233,7 @@ export default function Dashboard() {
       if (tabValue === 1) { // Only fetch users when on the users tab
         fetchUsers();
       }
-    }, 5000); // Poll every 5 seconds
+    }, 1000); // Poll every 1 second instead of 5 seconds
     return () => clearInterval(interval);
   }, [tabValue]);
 

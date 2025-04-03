@@ -21,19 +21,29 @@ class FaceRecognition:
             logger.error(f"Error initializing FaceRecognition: {str(e)}")
             raise
 
-    def get_embedding(self, image):
-        """Extract face embedding from image"""
+    def get_embeddings(self, image):
+        """Extract face embeddings from image for all detected faces"""
         try:
             logger.info("Detecting faces in image")
             faces = self.app.get(image)
             if not faces:
                 logger.warning("No faces detected in image")
-                return None
-            logger.info(f"Found {len(faces)} faces, using the first one")
-            return faces[0].embedding
+                return []
+            
+            logger.info(f"Found {len(faces)} faces")
+            # Return all face embeddings
+            return [(face.embedding, face.bbox) for face in faces]
         except Exception as e:
-            logger.error(f"Error extracting face embedding: {str(e)}")
+            logger.error(f"Error extracting face embeddings: {str(e)}")
+            return []
+
+    def get_embedding(self, image):
+        """Extract face embedding from image (legacy method for backward compatibility)"""
+        embeddings = self.get_embeddings(image)
+        if not embeddings:
             return None
+        logger.info(f"Found {len(embeddings)} faces, using the first one")
+        return embeddings[0][0]  # Return just the embedding of the first face
 
     def compare_faces(self, embedding1, embedding2):
         """Compare two face embeddings using cosine similarity"""
@@ -90,4 +100,32 @@ class FaceRecognition:
             return best_match, best_similarity
         
         logger.info(f"No match found, best similarity was {best_similarity} (threshold: {threshold})")
-        return None, best_similarity 
+        return None, best_similarity
+        
+    def find_matches_for_embeddings(self, query_embeddings, users, threshold=None):
+        """Find matches for multiple face embeddings"""
+        if threshold is None:
+            threshold = self.threshold
+            
+        matches = []
+        
+        for query_embedding, bbox in query_embeddings:
+            best_match = None
+            best_similarity = 0.0
+            
+            for user in users:
+                stored_embedding = self.str_to_embedding(user.embedding)
+                similarity = self.compare_faces(query_embedding, stored_embedding)
+                
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = user
+            
+            if best_similarity >= threshold and best_match:
+                matches.append({
+                    'user': best_match,
+                    'similarity': best_similarity,
+                    'bbox': bbox
+                })
+                
+        return matches 

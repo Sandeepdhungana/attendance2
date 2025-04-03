@@ -97,6 +97,10 @@ async def websocket_endpoint(websocket: WebSocket):
         # Get database session
         db = next(get_db())
         
+        # Track the last recognized users to detect when they leave the frame
+        last_recognized_users = {}  # Dictionary to track users by their user_id
+        no_face_count = 0
+        
         while True:
             # Receive image data from client
             data = await websocket.receive_text()
@@ -128,78 +132,105 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_json({"error": "Failed to decode image"})
                         continue
                     
-                    # Get face embedding
-                    query_embedding = face_recognition.get_embedding(img)
-                    if query_embedding is None:
-                        await websocket.send_json({"error": "No face detected in image"})
+                    # Get all face embeddings from the image
+                    face_embeddings = face_recognition.get_embeddings(img)
+                    if not face_embeddings:
+                        # No face detected, increment counter
+                        no_face_count += 1
+                        
+                        # If we've had multiple consecutive frames with no face, and we previously recognized users,
+                        # we can assume they've left the frame
+                        if no_face_count >= 3 and last_recognized_users:
+                            logger.info(f"Users {list(last_recognized_users.keys())} appear to have left the frame")
+                            last_recognized_users = {}
+                            no_face_count = 0
+                            
                         continue
                     
-                    # Get all users and their embeddings
+                    # Reset no face counter when faces are detected
+                    no_face_count = 0
+                    
+                    # Get all users from the database
                     users = db.query(models.User).all()
-                    stored_embeddings = [(user, face_recognition.str_to_embedding(user.embedding)) 
-                                        for user in users]
                     
-                    # Find best match
-                    best_match = None
-                    best_similarity = 0.0
-                    for user, embedding in stored_embeddings:
-                        similarity = face_recognition.compare_faces(query_embedding, embedding)
-                        if similarity > best_similarity:
-                            best_similarity = similarity
-                            best_match = user
+                    # Find matches for all detected faces
+                    matches = face_recognition.find_matches_for_embeddings(face_embeddings, users)
                     
-                    # For cosine similarity, higher is better (more similar)
-                    if best_match is None or best_similarity < face_recognition.threshold:
-                        await websocket.send_json({"error": f"No matching user found (similarity: {best_similarity}, threshold: {face_recognition.threshold})"})
+                    if not matches:
+                        await websocket.send_json({"error": "No matching users found in the frame"})
                         continue
                     
-                    # Check if attendance already marked for today
-                    today = get_local_date()
-                    existing_attendance = db.query(models.Attendance).filter(
-                        models.Attendance.user_id == best_match.user_id,
-                        models.Attendance.timestamp >= today
-                    ).first()
+                    # Process each matched user
+                    processed_users = []
+                    for match in matches:
+                        user = match['user']
+                        similarity = match['similarity']
+                        bbox = match['bbox']
+                        
+                        # Update last recognized users
+                        last_recognized_users[user.user_id] = {
+                            'user': user,
+                            'similarity': similarity,
+                            'bbox': bbox
+                        }
+                        
+                        # Check if attendance already marked for today
+                        today = get_local_date()
+                        existing_attendance = db.query(models.Attendance).filter(
+                            models.Attendance.user_id == user.user_id,
+                            models.Attendance.timestamp >= today
+                        ).first()
+                        
+                        if entry_type == "entry":
+                            if existing_attendance:
+                                processed_users.append({
+                                    "message": "Attendance already marked for today",
+                                    "user_id": user.user_id,
+                                    "name": user.name,
+                                    "timestamp": existing_attendance.timestamp.isoformat(),
+                                    "similarity": similarity
+                                })
+                            else:
+                                # Mark attendance
+                                new_attendance = models.Attendance(
+                                    user_id=user.user_id,
+                                    confidence=similarity  # Use similarity directly as confidence
+                                )
+                                db.add(new_attendance)
+                                db.commit()
+                                
+                                processed_users.append({
+                                    "message": "Attendance marked successfully",
+                                    "user_id": user.user_id,
+                                    "name": user.name,
+                                    "timestamp": new_attendance.timestamp.isoformat(),
+                                    "similarity": similarity
+                                })
+                        else:  # exit
+                            if not existing_attendance:
+                                processed_users.append({
+                                    "message": "No attendance record found for today",
+                                    "user_id": user.user_id,
+                                    "name": user.name,
+                                    "similarity": similarity
+                                })
+                            else:
+                                # Delete the attendance record
+                                db.delete(existing_attendance)
+                                db.commit()
+                                
+                                processed_users.append({
+                                    "message": "Attendance exit recorded successfully",
+                                    "user_id": user.user_id,
+                                    "name": user.name,
+                                    "similarity": similarity
+                                })
                     
-                    if entry_type == "entry":
-                        if existing_attendance:
-                            await websocket.send_json({
-                                "message": "Attendance already marked for today",
-                                "user_id": best_match.user_id,
-                                "name": best_match.name,
-                                "timestamp": existing_attendance.timestamp.isoformat()
-                            })
-                        else:
-                            # Mark attendance
-                            new_attendance = models.Attendance(
-                                user_id=best_match.user_id,
-                                confidence=best_similarity  # Use similarity directly as confidence
-                            )
-                            db.add(new_attendance)
-                            db.commit()
-                            
-                            await websocket.send_json({
-                                "message": "Attendance marked successfully",
-                                "user_id": best_match.user_id,
-                                "name": best_match.name,
-                                "timestamp": new_attendance.timestamp.isoformat()
-                            })
-                    else:  # exit
-                        if not existing_attendance:
-                            await websocket.send_json({
-                                "message": "No attendance record found for today",
-                                "user_id": best_match.user_id,
-                                "name": best_match.name
-                            })
-                        else:
-                            # Delete the attendance record
-                            db.delete(existing_attendance)
-                            db.commit()
-                            
-                            await websocket.send_json({
-                                "message": "Attendance exit recorded successfully",
-                                "user_id": best_match.user_id,
-                                "name": best_match.name
-                            })
+                    # Send response with all processed users
+                    await websocket.send_json({
+                        "multiple_users": True,
+                        "users": processed_users
+                    })
                 
                 except Exception as e:
                     logger.error(f"Error processing image: {str(e)}")
@@ -233,79 +264,86 @@ async def mark_attendance(
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
-    # Get face embedding
-    query_embedding = face_recognition.get_embedding(img)
-    if query_embedding is None:
+    # Get all face embeddings from the image
+    face_embeddings = face_recognition.get_embeddings(img)
+    if not face_embeddings:
         raise HTTPException(status_code=400, detail="No face detected in image")
     
-    # Get all users and their embeddings
+    # Get all users from the database
     users = db.query(models.User).all()
-    stored_embeddings = [(user, face_recognition.str_to_embedding(user.embedding)) 
-                        for user in users]
     
-    # Find best match
-    best_match = None
-    best_similarity = 0.0
-    for user, embedding in stored_embeddings:
-        similarity = face_recognition.compare_faces(query_embedding, embedding)
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_match = user
+    # Find matches for all detected faces
+    matches = face_recognition.find_matches_for_embeddings(face_embeddings, users)
     
-    # For cosine similarity, higher is better (more similar)
-    if best_match is None or best_similarity < face_recognition.threshold:
+    if not matches:
         raise HTTPException(
             status_code=400, 
-            detail=f"No matching user found (similarity: {best_similarity}, threshold: {face_recognition.threshold})"
+            detail="No matching users found in the image"
         )
     
-    # Check if attendance already marked for today
-    today = get_local_date()
-    existing_attendance = db.query(models.Attendance).filter(
-        models.Attendance.user_id == best_match.user_id,
-        models.Attendance.timestamp >= today
-    ).first()
+    # Process each matched user
+    processed_users = []
+    for match in matches:
+        user = match['user']
+        similarity = match['similarity']
+        
+        # Check if attendance already marked for today
+        today = get_local_date()
+        existing_attendance = db.query(models.Attendance).filter(
+            models.Attendance.user_id == user.user_id,
+            models.Attendance.timestamp >= today
+        ).first()
+        
+        if entry_type == "entry":
+            if existing_attendance:
+                processed_users.append({
+                    "message": "Attendance already marked for today",
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "timestamp": existing_attendance.timestamp.isoformat(),
+                    "similarity": similarity
+                })
+            else:
+                # Mark attendance
+                new_attendance = models.Attendance(
+                    user_id=user.user_id,
+                    confidence=similarity  # Use similarity directly as confidence
+                )
+                db.add(new_attendance)
+                db.commit()
+                
+                processed_users.append({
+                    "message": "Attendance marked successfully",
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "timestamp": new_attendance.timestamp.isoformat(),
+                    "similarity": similarity
+                })
+        else:  # exit
+            if not existing_attendance:
+                processed_users.append({
+                    "message": "No attendance record found for today",
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "similarity": similarity
+                })
+            else:
+                # Delete the attendance record
+                db.delete(existing_attendance)
+                db.commit()
+                
+                processed_users.append({
+                    "message": "Attendance exit recorded successfully",
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "similarity": similarity
+                })
     
-    if entry_type == "entry":
-        if existing_attendance:
-            return {
-                "message": "Attendance already marked for today",
-                "user_id": best_match.user_id,
-                "name": best_match.name,
-                "timestamp": existing_attendance.timestamp.isoformat()
-            }
-        
-        # Mark attendance
-        new_attendance = models.Attendance(
-            user_id=best_match.user_id,
-            confidence=best_similarity  # Use similarity directly as confidence
-        )
-        db.add(new_attendance)
-        db.commit()
-        
-        return {
-            "message": "Attendance marked successfully",
-            "user_id": best_match.user_id,
-            "name": best_match.name,
-            "timestamp": new_attendance.timestamp.isoformat()
-        }
-    else:  # exit
-        if not existing_attendance:
-            return {
-                "message": "No attendance record found for today",
-                "user_id": best_match.user_id,
-                "name": best_match.name
-            }
-        
-        # Delete the attendance record
-        db.delete(existing_attendance)
-        db.commit()
-        
-        return {
-            "message": "Attendance exit recorded successfully",
-            "user_id": best_match.user_id,
-            "name": best_match.name
-        }
+    # Return response with all processed users
+    return {
+        "multiple_users": True,
+        "users": processed_users
+    }
 
 @app.get("/attendance")
 def get_attendance(db: Session = Depends(get_db)):
