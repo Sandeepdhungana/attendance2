@@ -5,6 +5,7 @@ import Layout from './components/Layout';
 import Register from './pages/Register';
 import Attendance from './pages/Attendance';
 import Dashboard from './pages/Dashboard';
+import Users from './pages/Users';
 import Debug from './pages/Debug';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 
@@ -129,6 +130,7 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/register" element={<Register />} />
               <Route path="/attendance" element={<Attendance />} />
+              <Route path="/users" element={<Users />} />
               <Route path="/debug" element={<Debug />} />
             </Routes>
           </Layout>

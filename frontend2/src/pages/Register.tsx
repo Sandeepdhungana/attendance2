@@ -1,45 +1,56 @@
 import React, { useState, useRef } from 'react';
-import { Box, Button, TextField, Typography, Paper, Alert, Snackbar, Tabs, Tab } from '@mui/material';
+import {
+  Box,
+  Button,
+  TextField,
+  Typography,
+  Paper,
+  Grid,
+  Snackbar,
+  Alert,
+  ToggleButton,
+  ToggleButtonGroup,
+} from '@mui/material';
 import { useWebSocket } from '../App';
 import Webcam from 'react-webcam';
 
 const Register: React.FC = () => {
-  const { sendMessage } = useWebSocket();
   const [user_id, setUserId] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState(0);
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [image, setImage] = useState<string | null>(null);
+  const [captureType, setCaptureType] = useState<'webcam' | 'upload'>('webcam');
+  const [isCapturing, setIsCapturing] = useState(false);
   const webcamRef = useRef<Webcam>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { sendMessage } = useWebSocket();
 
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setActiveTab(newValue);
-    setCapturedImage(null);
-    setSelectedFile(null);
+  const handleCaptureTypeChange = (
+    event: React.MouseEvent<HTMLElement>,
+    newCaptureType: 'webcam' | 'upload'
+  ) => {
+    if (newCaptureType !== null) {
+      setCaptureType(newCaptureType);
+      setImage(null);
+    }
   };
 
-  const capture = () => {
+  const handleCapture = () => {
     if (webcamRef.current) {
       const imageSrc = webcamRef.current.getScreenshot();
       if (imageSrc) {
-        setCapturedImage(imageSrc);
+        setImage(imageSrc);
       }
     }
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files && event.target.files[0]) {
-      const file = event.target.files[0];
-      setSelectedFile(file);
-      
-      // Create a preview URL for the image
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
       const reader = new FileReader();
-      reader.onload = (e) => {
-        if (e.target?.result) {
-          setCapturedImage(e.target.result as string);
-        }
+      reader.onloadend = () => {
+        setImage(reader.result as string);
       };
       reader.readAsDataURL(file);
     }
@@ -55,7 +66,7 @@ const Register: React.FC = () => {
       return;
     }
 
-    if (!capturedImage) {
+    if (!image) {
       setError('Please capture or upload a photo');
       return;
     }
@@ -65,117 +76,138 @@ const Register: React.FC = () => {
         type: 'register_user',
         user_id,
         name,
-        image: capturedImage
+        image
       });
 
       setSuccess('User registered successfully!');
       setUserId('');
       setName('');
-      setCapturedImage(null);
-      setSelectedFile(null);
+      setImage(null);
     } catch (err) {
       setError('Failed to register user. Please try again.');
+      console.error('Registration error:', err);
     }
   };
 
   return (
-    <Box sx={{ maxWidth: 600, mx: 'auto', p: 3 }}>
-      <Paper elevation={3} sx={{ p: 3 }}>
+    <Box sx={{ p: 3 }}>
+      <Paper elevation={3} sx={{ p: 3, maxWidth: 600, mx: 'auto' }}>
         <Typography variant="h5" gutterBottom>
           Register New User
         </Typography>
-
-        <Tabs value={activeTab} onChange={handleTabChange} sx={{ mb: 2 }}>
-          <Tab label="Camera" />
-          <Tab label="Upload Photo" />
-        </Tabs>
-
-        {activeTab === 0 && (
-          <Box sx={{ mb: 2 }}>
-            <Webcam
-              audio={false}
-              ref={webcamRef}
-              screenshotFormat="image/jpeg"
-              width="100%"
-              videoConstraints={{
-                facingMode: 'user'
-              }}
-            />
-            <Button
-              variant="contained"
-              onClick={capture}
-              fullWidth
-              sx={{ mt: 1 }}
-            >
-              Capture Photo
-            </Button>
-          </Box>
-        )}
-
-        {activeTab === 1 && (
-          <Box sx={{ mb: 2 }}>
-            <input
-              accept="image/*"
-              style={{ display: 'none' }}
-              id="photo-upload"
-              type="file"
-              onChange={handleFileChange}
-            />
-            <label htmlFor="photo-upload">
-              <Button variant="contained" component="span" fullWidth>
-                Upload Photo
-              </Button>
-            </label>
-          </Box>
-        )}
-
-        {capturedImage && (
-          <Box sx={{ mb: 2, textAlign: 'center' }}>
-            <Typography variant="subtitle1" gutterBottom>
-              Preview
-            </Typography>
-            <img
-              src={capturedImage}
-              alt="Captured"
-              style={{ maxWidth: '100%', maxHeight: 200 }}
-            />
-          </Box>
-        )}
-
+        
         <form onSubmit={handleSubmit}>
-          <TextField
-            label="User ID"
-            value={user_id}
-            onChange={(e) => setUserId(e.target.value)}
-            fullWidth
-            margin="normal"
-            required
-          />
-          <TextField
-            label="Name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            fullWidth
-            margin="normal"
-            required
-          />
-          <Button
-            type="submit"
-            variant="contained"
-            color="primary"
-            fullWidth
-            sx={{ mt: 2 }}
-            disabled={!capturedImage}
-          >
-            Register
-          </Button>
+          <Grid container spacing={3}>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="User ID"
+                value={user_id}
+                onChange={(e) => setUserId(e.target.value)}
+                required
+              />
+            </Grid>
+            
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <ToggleButtonGroup
+                value={captureType}
+                exclusive
+                onChange={handleCaptureTypeChange}
+                fullWidth
+              >
+                <ToggleButton value="webcam">Use Webcam</ToggleButton>
+                <ToggleButton value="upload">Upload Photo</ToggleButton>
+              </ToggleButtonGroup>
+            </Grid>
+
+            {captureType === 'webcam' ? (
+              <Grid item xs={12}>
+                <Box sx={{ mb: 2 }}>
+                  <Webcam
+                    audio={false}
+                    ref={webcamRef}
+                    screenshotFormat="image/jpeg"
+                    width="100%"
+                    videoConstraints={{
+                      facingMode: 'user'
+                    }}
+                  />
+                </Box>
+                <Button
+                  variant="contained"
+                  onClick={handleCapture}
+                  fullWidth
+                >
+                  Capture Photo
+                </Button>
+              </Grid>
+            ) : (
+              <Grid item xs={12}>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileUpload}
+                  style={{ display: 'none' }}
+                  ref={fileInputRef}
+                />
+                <Button
+                  variant="contained"
+                  onClick={() => fileInputRef.current?.click()}
+                  fullWidth
+                >
+                  Upload Photo
+                </Button>
+              </Grid>
+            )}
+
+            {image && (
+              <Grid item xs={12}>
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle1" gutterBottom>
+                    Preview:
+                  </Typography>
+                  <img
+                    src={image}
+                    alt="Captured"
+                    style={{ maxWidth: '100%', maxHeight: 300 }}
+                  />
+                </Box>
+              </Grid>
+            )}
+
+            <Grid item xs={12}>
+              <Button
+                type="submit"
+                variant="contained"
+                color="primary"
+                fullWidth
+                disabled={!image}
+              >
+                Register
+              </Button>
+            </Grid>
+          </Grid>
         </form>
 
-        {error && (
-          <Alert severity="error" sx={{ mt: 2 }}>
+        <Snackbar
+          open={!!error}
+          autoHideDuration={6000}
+          onClose={() => setError(null)}
+        >
+          <Alert severity="error" onClose={() => setError(null)}>
             {error}
           </Alert>
-        )}
+        </Snackbar>
 
         <Snackbar
           open={!!success}

@@ -18,6 +18,7 @@ import {
   Dashboard as DashboardIcon,
   PersonAdd as PersonAddIcon,
   HowToReg as HowToRegIcon,
+  People as PeopleIcon,
   BugReport as BugReportIcon,
 } from '@mui/icons-material';
 
@@ -31,6 +32,7 @@ const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Register User', icon: <PersonAddIcon />, path: '/register' },
   { text: 'Mark Attendance', icon: <HowToRegIcon />, path: '/attendance' },
+  { text: 'Users', icon: <PeopleIcon />, path: '/users' },
   { text: 'Debug', icon: <BugReportIcon />, path: '/debug' },
 ];
 

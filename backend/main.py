@@ -533,7 +533,7 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                         }])
             
             elif data.get("type") == "register_user":
-                # Register new user with photo
+                # Register new user
                 user_id = data.get("user_id")
                 name = data.get("name")
                 image_data = data.get("image")
@@ -545,9 +545,22 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                     })
                     continue
                 
+                # Check if user already exists
+                existing_user = db.query(models.User).filter(models.User.user_id == user_id).first()
+                if existing_user:
+                    await websocket.send_json({
+                        "status": "error",
+                        "message": "User ID already registered"
+                    })
+                    continue
+                
                 try:
-                    # Decode base64 image
-                    image_data = image_data.split(",")[1]
+                    # Process the image
+                    # Remove data URL prefix if present
+                    if "," in image_data:
+                        image_data = image_data.split(",")[1]
+                    
+                    # Decode base64 to bytes
                     image_bytes = base64.b64decode(image_data)
                     nparr = np.frombuffer(image_bytes, np.uint8)
                     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -568,15 +581,6 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                         })
                         continue
                     
-                    # Check if user already exists
-                    existing_user = db.query(models.User).filter(models.User.user_id == user_id).first()
-                    if existing_user:
-                        await websocket.send_json({
-                            "status": "error",
-                            "message": "User ID already registered"
-                        })
-                        continue
-                    
                     # Create new user with embedding
                     new_user = models.User(
                         user_id=user_id,
@@ -586,12 +590,12 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                     db.add(new_user)
                     db.commit()
                     
-                    # Save the registration photo
+                    # Save the registration image
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                     filename = f"register_{user_id}_{timestamp}.jpg"
                     filepath = os.path.join(IMAGES_DIR, filename)
                     cv2.imwrite(filepath, img)
-                    logger.info(f"Saved registration photo to {filepath}")
+                    logger.info(f"Saved registration image to {filepath}")
                     
                     # Broadcast user registration
                     await broadcast_attendance_update([{
