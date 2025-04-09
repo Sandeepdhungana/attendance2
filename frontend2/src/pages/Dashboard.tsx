@@ -73,6 +73,7 @@ export default function Dashboard() {
   const [attendanceToDelete, setAttendanceToDelete] = useState<AttendanceRecord | null>(null);
   const [attendanceDeleteLoading, setAttendanceDeleteLoading] = useState(false);
   const { ws, isConnected, sendMessage } = useWebSocket();
+  const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 10 });
 
   const attendanceColumns: GridColDef[] = [
     {
@@ -286,9 +287,10 @@ export default function Dashboard() {
                   rows={records}
                   columns={attendanceColumns}
                   getRowId={(row) => row.id}
-                  pageSize={10}
-                  rowsPerPageOptions={[10, 25, 50]}
-                  disableSelectionOnClick
+                  paginationModel={paginationModel}
+                  onPaginationModelChange={(model) => setPaginationModel(model)}
+                  pageSizeOptions={[10, 25, 50]}
+                  disableRowSelectionOnClick
                   sx={{
                     '& .MuiDataGrid-cell': {
                       fontSize: '1rem',
@@ -314,9 +316,10 @@ export default function Dashboard() {
                   rows={users}
                   columns={userColumns}
                   getRowId={(row) => row.user_id}
-                  pageSize={10}
-                  rowsPerPageOptions={[10, 25, 50]}
-                  disableSelectionOnClick
+                  paginationModel={paginationModel}
+                  onPaginationModelChange={(model) => setPaginationModel(model)}
+                  pageSizeOptions={[10, 25, 50]}
+                  disableRowSelectionOnClick
                   sx={{
                     '& .MuiDataGrid-cell': {
                       fontSize: '1rem',

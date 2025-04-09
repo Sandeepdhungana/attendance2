@@ -20,6 +20,7 @@ import {
   Alert,
 } from '@mui/material';
 import api from '../api/config';
+import { useWebSocket } from '../App';
 
 interface User {
   user_id: string;
@@ -30,8 +31,10 @@ interface User {
 
 export default function Users() {
   const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const { sendMessage } = useWebSocket();
   const [openDialog, setOpenDialog] = useState(false);
   const [newUser, setNewUser] = useState({
     name: '',
@@ -46,8 +49,6 @@ export default function Users() {
     } catch (error) {
       setError('Failed to fetch users');
       console.error('Error fetching users:', error);
-    } finally {
-      setLoading(false);
     }
   };
 

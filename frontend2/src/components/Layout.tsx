@@ -8,18 +8,20 @@ import {
   IconButton,
   List,
   ListItem,
+  ListItemButton,
   ListItemIcon,
   ListItemText,
   Toolbar,
   Typography,
+  useTheme,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
   Dashboard as DashboardIcon,
-  PersonAdd as PersonAddIcon,
-  HowToReg as HowToRegIcon,
-  People as PeopleIcon,
-  BugReport as BugReportIcon,
+  Face as FaceIcon,
+  Group as GroupIcon,
+  Settings as SettingsIcon,
+  Logout as LogoutIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -30,8 +32,8 @@ interface LayoutProps {
 
 const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
-  { text: 'Register User', icon: <PersonAddIcon />, path: '/register' },
-  { text: 'Mark Attendance', icon: <HowToRegIcon />, path: '/attendance' },
+  { text: 'Register User', icon: <FaceIcon />, path: '/register' },
+  { text: 'Mark Attendance', icon: <GroupIcon />, path: '/attendance' },
   // { text: 'Users', icon: <PeopleIcon />, path: '/users' },
   // { text: 'Debug', icon: <BugReportIcon />, path: '/debug' },
 ];

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -10,6 +10,11 @@ import {
   Alert,
   ToggleButton,
   ToggleButtonGroup,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  SelectChangeEvent,
 } from '@mui/material';
 import { useWebSocket } from '../App';
 import Webcam from 'react-webcam';
@@ -22,12 +27,37 @@ const Register: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
   const [captureType, setCaptureType] = useState<'webcam' | 'upload'>('webcam');
   const [isCapturing, setIsCapturing] = useState(false);
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<string>('');
   const webcamRef = useRef<Webcam>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { sendMessage } = useWebSocket();
 
+  useEffect(() => {
+    const getCameras = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        setAvailableCameras(videoDevices);
+        
+        if (videoDevices.length > 0) {
+          setSelectedCamera(videoDevices[0].deviceId);
+        }
+      } catch (error) {
+        console.error('Error enumerating cameras:', error);
+        setError('Failed to access cameras. Please check your camera permissions.');
+      }
+    };
+
+    getCameras();
+  }, []);
+
+  const handleCameraChange = (event: SelectChangeEvent) => {
+    setSelectedCamera(event.target.value);
+  };
+
   const handleCaptureTypeChange = (
-    event: React.MouseEvent<HTMLElement>,
+    _event: React.MouseEvent<HTMLElement>,
     newCaptureType: 'webcam' | 'upload'
   ) => {
     if (newCaptureType !== null) {
@@ -90,12 +120,12 @@ const Register: React.FC = () => {
   };
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Paper elevation={3} sx={{ p: 3, maxWidth: 600, mx: 'auto' }}>
-        <Typography variant="h5" gutterBottom>
-          Register New User
-        </Typography>
-        
+    <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
+      <Typography variant="h4" gutterBottom>
+        Register User
+      </Typography>
+
+      <Paper sx={{ p: 3 }}>
         <form onSubmit={handleSubmit}>
           <Grid container spacing={3}>
             <Grid item xs={12}>
@@ -132,6 +162,21 @@ const Register: React.FC = () => {
 
             {captureType === 'webcam' ? (
               <Grid item xs={12}>
+                <FormControl fullWidth sx={{ mb: 2 }}>
+                  <InputLabel id="camera-select-label">Select Camera</InputLabel>
+                  <Select
+                    labelId="camera-select-label"
+                    value={selectedCamera}
+                    label="Select Camera"
+                    onChange={handleCameraChange}
+                  >
+                    {availableCameras.map((camera) => (
+                      <MenuItem key={camera.deviceId} value={camera.deviceId}>
+                        {camera.label || `Camera ${camera.deviceId}`}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
                 <Box sx={{ mb: 2 }}>
                   <Webcam
                     audio={false}
@@ -139,7 +184,9 @@ const Register: React.FC = () => {
                     screenshotFormat="image/jpeg"
                     width="100%"
                     videoConstraints={{
-                      facingMode: 'user'
+                      width: 640,
+                      height: 480,
+                      deviceId: selectedCamera
                     }}
                   />
                 </Box>

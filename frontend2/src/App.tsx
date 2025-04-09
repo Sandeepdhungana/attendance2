@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import { createTheme } from '@mui/material/styles';
 import Layout from './components/Layout';
@@ -40,7 +40,7 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
       wsRef.current = null;
     }
 
-    const ws = new WebSocket('ws://localhost:8000/ws/attendance');
+    const ws = new WebSocket('ws://185.211.6.6:8000/ws/attendance');
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -49,8 +49,8 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
       reconnectAttemptsRef.current = 0;
     };
 
-    ws.onclose = () => {
-      console.log('WebSocket connection closed');
+    ws.onclose = (event) => {
+      console.log('WebSocket connection closed', event.code, event.reason);
       setIsConnected(false);
       
       // Attempt to reconnect if not manually closed
@@ -71,6 +71,10 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
+      // Try to reconnect on error
+      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        connectWebSocket();
+      }
     };
   };
 
@@ -124,17 +128,15 @@ function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <WebSocketProvider>
-        <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/attendance" element={<Attendance />} />
-              <Route path="/users" element={<Users />} />
-              <Route path="/debug" element={<Debug />} />
-            </Routes>
-          </Layout>
-        </Router>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/attendance" element={<Attendance />} />
+            <Route path="/users" element={<Users />} />
+            <Route path="/debug" element={<Debug />} />
+          </Routes>
+        </Layout>
       </WebSocketProvider>
     </ThemeProvider>
   );

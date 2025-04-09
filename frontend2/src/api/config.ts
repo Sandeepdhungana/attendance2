@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 // API Configuration
+// const API_BASE_URL = 'http://185.211.6.6:8000';
 const API_BASE_URL = 'http://localhost:8000';
 
 // Create axios instance with default config
@@ -11,7 +12,7 @@ const api = axios.create({
   },
 });
 
-// Add response interceptor to handle errors
+// Add response interceptor to handle errorsP
 api.interceptors.response.use(
   (response) => response,
   (error) => {

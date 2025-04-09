@@ -13,6 +13,10 @@ import {
   ListItem,
   ListItemText,
   Divider,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import Webcam from 'react-webcam';
 import api from '../api/config';
@@ -66,6 +70,8 @@ export default function Attendance() {
   const [userData, setUserData] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<string>('');
   const webcamRef = useRef<Webcam>(null);
   const { ws, isConnected, sendMessage } = useWebSocket();
   const streamIntervalRef = useRef<number | null>(null);
@@ -367,6 +373,34 @@ export default function Attendance() {
     }
   }, [videoFile, entryType, stopStreaming, isConnected, sendMessage]);
 
+  // Add useEffect to enumerate cameras
+  useEffect(() => {
+    const getCameras = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        setAvailableCameras(videoDevices);
+        
+        // Set the first camera as default if available
+        if (videoDevices.length > 0) {
+          setSelectedCamera(videoDevices[0].deviceId);
+        }
+      } catch (error) {
+        console.error('Error enumerating cameras:', error);
+        setMessage({
+          type: 'error',
+          text: 'Failed to access cameras. Please check your camera permissions.',
+        });
+      }
+    };
+
+    getCameras();
+  }, []);
+
+  // Add handler for camera selection
+  const handleCameraChange = (event: React.ChangeEvent<{ value: unknown }>) => {
+    setSelectedCamera(event.target.value as string);
+  };
 
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
@@ -378,17 +412,34 @@ export default function Attendance() {
         <CardContent>
           <Box sx={{ position: 'relative', mb: 2 }}>
             {!isVideoMode ? (
-              <Webcam
-                ref={webcamRef}
-                audio={false}
-                screenshotFormat="image/jpeg"
-                videoConstraints={{
-                  width: 640,
-                  height: 480,
-                  facingMode: 'user',
-                }}
-                style={{ width: '100%', borderRadius: 8 }}
-              />
+              <>
+                <FormControl fullWidth sx={{ mb: 2 }}>
+                  <InputLabel id="camera-select-label">Select Camera</InputLabel>
+                  <Select
+                    labelId="camera-select-label"
+                    value={selectedCamera}
+                    label="Select Camera"
+                    onChange={handleCameraChange}
+                  >
+                    {availableCameras.map((camera) => (
+                      <MenuItem key={camera.deviceId} value={camera.deviceId}>
+                        {camera.label || `Camera ${camera.deviceId}`}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Webcam
+                  ref={webcamRef}
+                  audio={false}
+                  screenshotFormat="image/jpeg"
+                  videoConstraints={{
+                    width: 640,
+                    height: 480,
+                    deviceId: selectedCamera
+                  }}
+                  style={{ width: '100%', borderRadius: 8 }}
+                />
+              </>
             ) : (
               <video
                 ref={videoRef}
@@ -398,24 +449,6 @@ export default function Attendance() {
                 autoPlay
                 muted
               />
-            )}
-            {(isCapturing || isStreaming) && (
-              <Box
-                sx={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: 'rgba(0, 0, 0, 0.5)',
-                  borderRadius: 8,
-                }}
-              >
-                <CircularProgress color="primary" />
-              </Box>
             )}
             
             {/* Face count indicator */}
@@ -440,6 +473,13 @@ export default function Attendance() {
               {faceCount}
             </Box>
           </Box>
+
+          {/* Streaming status text */}
+          {isStreaming && (
+            <Typography variant="body2" color="primary" sx={{ mb: 2, textAlign: 'center' }}>
+              Streaming in progress...
+            </Typography>
+          )}
 
           <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mb: 2 }}>
             <ToggleButtonGroup
