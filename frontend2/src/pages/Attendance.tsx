@@ -23,6 +23,7 @@ import api from '../api/config';
 import { Login as LoginIcon, Logout as LogoutIcon, CloudUpload as CloudUploadIcon } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useWebSocket } from '../App';
+import { SelectChangeEvent } from '@mui/material';
 
 interface UserResult {
   message: string;
@@ -398,8 +399,8 @@ export default function Attendance() {
   }, []);
 
   // Add handler for camera selection
-  const handleCameraChange = (event: React.ChangeEvent<{ value: unknown }>) => {
-    setSelectedCamera(event.target.value as string);
+  const handleCameraChange = (event: SelectChangeEvent<string>) => {
+    setSelectedCamera(event.target.value);
   };
 
   return (
