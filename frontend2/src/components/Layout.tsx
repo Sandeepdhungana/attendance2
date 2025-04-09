@@ -32,8 +32,8 @@ const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Register User', icon: <PersonAddIcon />, path: '/register' },
   { text: 'Mark Attendance', icon: <HowToRegIcon />, path: '/attendance' },
-  { text: 'Users', icon: <PeopleIcon />, path: '/users' },
-  { text: 'Debug', icon: <BugReportIcon />, path: '/debug' },
+  // { text: 'Users', icon: <PeopleIcon />, path: '/users' },
+  // { text: 'Debug', icon: <BugReportIcon />, path: '/debug' },
 ];
 
 export default function Layout({ children }: LayoutProps) {

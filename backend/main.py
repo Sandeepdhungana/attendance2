@@ -594,7 +594,7 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                     filename = f"register_{user_id}_{timestamp}.jpg"
                     filepath = os.path.join(IMAGES_DIR, filename)
-                    cv2.imwrite(filepath, img)
+                    # cv2.imwrite(filepath, img)
                     logger.info(f"Saved registration image to {filepath}")
                     
                     # Broadcast user registration
@@ -631,7 +631,7 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 filename = f"websocket_{entry_type}_{timestamp}.jpg"
                 filepath = os.path.join(IMAGES_DIR, filename)
-                cv2.imwrite(filepath, img)
+                # cv2.imwrite(filepath, img)
                 logger.info(f"Saved WebSocket frame to {filepath}")
                 
                 # Get all face embeddings from the image
@@ -770,41 +770,43 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
             pass
         logger.info(f"WebSocket connection closed. Total connections: {len(active_connections)}")
 
-# Function to save a frame to the images folder
-def save_frame(image_data, prefix="frame"):
-    """Save a frame to the images folder with a timestamp"""
-    try:
-        # Remove data URL prefix if present
-        if "," in image_data:
-            image_data = image_data.split(",")[1]
+# # Function to save a frame to the images folder
+# def save_frame(image_data, prefix="frame"):
+#     """Save a frame to the images folder with a timestamp"""
+#     return
+#     try:
+#         # Remove data URL prefix if present
+#         if "," in image_data:
+#             image_data = image_data.split(",")[1]
         
-        # Decode base64 to bytes
-        image_bytes = base64.b64decode(image_data)
+#         # Decode base64 to bytes
+#         image_bytes = base64.b64decode(image_data)
         
-        # Convert to numpy array
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+#         # Convert to numpy array
+#         nparr = np.frombuffer(image_bytes, np.uint8)
+#         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
-        if img is None:
-            logger.error("Failed to decode image data")
-            return False
+#         if img is None:
+#             logger.error("Failed to decode image data")
+#             return False
         
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"{prefix}_{timestamp}.jpg"
-        filepath = os.path.join(IMAGES_DIR, filename)
+#         # Generate filename with timestamp
+#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+#         filename = f"{prefix}_{timestamp}.jpg"
+#         filepath = os.path.join(IMAGES_DIR, filename)
         
-        # Save the image
-        success = cv2.imwrite(filepath, img)
-        if success:
-            logger.info(f"Saved frame to {filepath}")
-            return True
-        else:
-            logger.error(f"Failed to save frame to {filepath}")
-            return False
-    except Exception as e:
-        logger.error(f"Error saving frame: {str(e)}")
-        return False
+#         # Save the image
+#         # success = cv2.imwrite(filepath, img)
+#         success = False
+#         if success:
+#             logger.info(f"Saved frame to {filepath}")
+#             return True
+#         else:
+#             logger.error(f"Failed to save frame to {filepath}")
+#             return False
+#     except Exception as e:
+#         logger.error(f"Error saving frame: {str(e)}")
+#         return False
 
 @app.get("/users")
 def get_users(db: Session = Depends(get_db)):
@@ -899,7 +901,7 @@ async def mark_attendance(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     filename = f"rest_api_{entry_type}_{timestamp}.jpg"
     filepath = os.path.join(IMAGES_DIR, filename)
-    cv2.imwrite(filepath, img)
+    # cv2.imwrite(filepath, img)
     logger.info(f"Saved REST API frame to {filepath}")
     
     # Get all face embeddings from the image
@@ -1025,7 +1027,7 @@ async def debug_face_recognition(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     filename = f"debug_{timestamp}.jpg"
     filepath = os.path.join(IMAGES_DIR, filename)
-    cv2.imwrite(filepath, img)
+    # cv2.imwrite(filepath, img)
     logger.info(f"Saved debug frame to {filepath}")
     
     # Get all face embeddings from the image
