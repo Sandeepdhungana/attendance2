@@ -4,6 +4,9 @@ from insightface.app import FaceAnalysis
 import cv2
 import json
 import logging
+import concurrent.futures
+from typing import List, Dict, Any, Tuple
+import threading
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,6 +19,8 @@ class FaceRecognition:
             self.app = FaceAnalysis(name='buffalo_l')
             self.app.prepare(ctx_id=0, det_size=(640, 640))
             self.threshold = 0.5 # Cosine similarity threshold for matching
+            # Create a thread pool for parallel processing
+            self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
             logger.info("FaceRecognition initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing FaceRecognition: {str(e)}")
@@ -80,43 +85,37 @@ class FaceRecognition:
             logger.error(f"Error converting string to embedding: {str(e)}")
             raise
 
-    def find_match(self, query_embedding, stored_embeddings, threshold=None):
-        """Find the best matching face from stored embeddings"""
-        if threshold is None:
-            threshold = self.threshold
+    def find_match_for_user(self, query_embedding: np.ndarray, user: Any, threshold: float) -> Tuple[Any, float]:
+        """Find match for a single user (to be used in parallel)"""
+        stored_embedding = self.str_to_embedding(user.embedding)
+        similarity = self.compare_faces(query_embedding, stored_embedding)
+        return user, similarity
 
-        best_match = None
-        best_similarity = 0.0  # For cosine similarity, higher is better
-
-        for stored_embedding in stored_embeddings:
-            similarity = self.compare_faces(query_embedding, stored_embedding)
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_match = stored_embedding
-
-        # For cosine similarity, higher is better (more similar)
-        if best_similarity >= threshold:
-            logger.info(f"Found match with similarity {best_similarity} (threshold: {threshold})")
-            return best_match, best_similarity
-        
-        logger.info(f"No match found, best similarity was {best_similarity} (threshold: {threshold})")
-        return None, best_similarity
-        
-    def find_matches_for_embeddings(self, query_embeddings, users, threshold=None):
-        """Find matches for multiple face embeddings"""
+    def find_matches_for_embeddings(self, query_embeddings: List[Tuple[np.ndarray, Any]], users: List[Any], threshold: float = None) -> List[Dict[str, Any]]:
+        """Find matches for multiple face embeddings using parallel processing"""
         if threshold is None:
             threshold = self.threshold
             
         matches = []
         
         for query_embedding, bbox in query_embeddings:
+            # Submit all user comparisons to thread pool
+            futures = []
+            for user in users:
+                future = self.thread_pool.submit(
+                    self.find_match_for_user,
+                    query_embedding,
+                    user,
+                    threshold
+                )
+                futures.append(future)
+            
+            # Get results and find best match
             best_match = None
             best_similarity = 0.0
             
-            for user in users:
-                stored_embedding = self.str_to_embedding(user.embedding)
-                similarity = self.compare_faces(query_embedding, stored_embedding)
-                
+            for future in concurrent.futures.as_completed(futures):
+                user, similarity = future.result()
                 if similarity > best_similarity:
                     best_similarity = similarity
                     best_match = user
@@ -128,4 +127,8 @@ class FaceRecognition:
                     'bbox': bbox
                 })
                 
-        return matches 
+        return matches
+
+    def __del__(self):
+        """Clean up thread pool when object is destroyed"""
+        self.thread_pool.shutdown(wait=True) 

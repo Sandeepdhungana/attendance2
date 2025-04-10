@@ -55,6 +55,12 @@ websocket_responses_queue = Queue()
 # Dictionary to store pending futures
 pending_futures = {}
 
+# User cache to avoid frequent database queries
+user_cache = {}
+user_cache_lock = threading.Lock()
+user_cache_last_updated = 0
+USER_CACHE_TTL = 300  # 5 minutes
+
 # WebSocket ping interval in seconds (30 seconds)
 PING_INTERVAL = 30
 
@@ -76,6 +82,20 @@ IMAGES_DIR = "images"
 if not os.path.exists(IMAGES_DIR):
     os.makedirs(IMAGES_DIR)
     logger.info(f"Created images directory: {IMAGES_DIR}")
+
+def get_cached_users(db: Session):
+    """Get users from cache or database with TTL"""
+    global user_cache, user_cache_last_updated
+    
+    current_time = time.time()
+    with user_cache_lock:
+        if current_time - user_cache_last_updated > USER_CACHE_TTL or not user_cache:
+            # Update cache
+            users = db.query(models.User).all()
+            user_cache = {user.user_id: user for user in users}
+            user_cache_last_updated = current_time
+            logger.info("User cache updated")
+        return list(user_cache.values())
 
 # Function to process the queue and broadcast updates
 async def process_queue():
@@ -310,8 +330,8 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
         # Reset no face counter when faces are detected
         no_face_count = 0
         
-        # Get all users from the database
-        users = thread_db.query(models.User).all()
+        # Get all users from the cache
+        users = get_cached_users(thread_db)
         
         # Find matches for all detected faces
         matches = face_recognition.find_matches_for_embeddings(face_embeddings, users)
@@ -321,7 +341,7 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
         
         # Process each matched user
         processed_users = []
-        attendance_updates = []  # Track attendance updates to broadcast
+        attendance_updates = []
         
         for match in matches:
             user = match['user']
@@ -355,7 +375,7 @@ def process_image_in_thread(image_data: str, entry_type: str, db_session: Sessio
                     # Mark attendance
                     new_attendance = models.Attendance(
                         user_id=user.user_id,
-                        confidence=similarity  # Use similarity directly as confidence
+                        confidence=similarity
                     )
                     thread_db.add(new_attendance)
                     thread_db.commit()
@@ -473,6 +493,10 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
     active_connections.add(websocket)
     logger.info(f"New WebSocket connection. Total connections: {len(active_connections)}")
     
+    # Initialize thread-local variables
+    last_recognized_users = {}
+    no_face_count = 0
+    
     try:
         while True:
             data = await websocket.receive_json()
@@ -491,8 +515,8 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                 })
             
             elif data.get("type") == "get_users":
-                # Get all users
-                users = db.query(models.User).all()
+                # Get all users from cache
+                users = get_cached_users(db)
                 await websocket.send_json({
                     "type": "user_data",
                     "data": [{
@@ -621,131 +645,21 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                 # Process image for face recognition
                 entry_type = data.get("entry_type", "entry")
                 
-                # Decode base64 image
-                image_data = data["image"].split(",")[1]
-                image_bytes = base64.b64decode(image_data)
-                nparr = np.frombuffer(image_bytes, np.uint8)
-                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                # Submit image processing to thread pool
+                future = thread_pool.submit(
+                    process_image_in_thread,
+                    data["image"],
+                    entry_type,
+                    db,
+                    last_recognized_users,
+                    no_face_count
+                )
                 
-                # Save the frame
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                filename = f"websocket_{entry_type}_{timestamp}.jpg"
-                filepath = os.path.join(IMAGES_DIR, filename)
-                # cv2.imwrite(filepath, img)
-                logger.info(f"Saved WebSocket frame to {filepath}")
+                # Store the future
+                pending_futures[future] = websocket
                 
-                # Get all face embeddings from the image
-                face_embeddings = face_recognition.get_embeddings(img)
-                if not face_embeddings:
-                    await websocket.send_json({
-                        "status": "no_face_detected",
-                        "message": "No face detected in image"
-                    })
-                    continue
-                
-                # Get all users from the database
-                users = db.query(models.User).all()
-                
-                # Find matches for all detected faces
-                matches = face_recognition.find_matches_for_embeddings(face_embeddings, users)
-                
-                if not matches:
-                    await websocket.send_json({
-                        "status": "no_matching_users",
-                        "message": "No matching users found in the image"
-                    })
-                    continue
-                
-                # Process each matched user
-                processed_users = []
-                attendance_updates = []
-                
-                for match in matches:
-                    user = match['user']
-                    similarity = match['similarity']
-                    
-                    # Check if attendance already marked for today
-                    today = get_local_date()
-                    existing_attendance = db.query(models.Attendance).filter(
-                        models.Attendance.user_id == user.user_id,
-                        models.Attendance.timestamp >= today
-                    ).first()
-                    
-                    if entry_type == "entry":
-                        if existing_attendance:
-                            processed_users.append({
-                                "message": "Attendance already marked for today",
-                                "user_id": user.user_id,
-                                "name": user.name,
-                                "timestamp": existing_attendance.timestamp.isoformat(),
-                                "similarity": similarity
-                            })
-                        else:
-                            # Mark attendance
-                            new_attendance = models.Attendance(
-                                user_id=user.user_id,
-                                confidence=similarity
-                            )
-                            db.add(new_attendance)
-                            db.commit()
-                            
-                            # Create attendance update
-                            attendance_update = {
-                                "action": "entry",
-                                "user_id": user.user_id,
-                                "name": user.name,
-                                "timestamp": new_attendance.timestamp.isoformat(),
-                                "similarity": similarity
-                            }
-                            attendance_updates.append(attendance_update)
-                            
-                            processed_users.append({
-                                "message": "Attendance marked successfully",
-                                "user_id": user.user_id,
-                                "name": user.name,
-                                "timestamp": new_attendance.timestamp.isoformat(),
-                                "similarity": similarity
-                            })
-                    else:  # exit
-                        if not existing_attendance:
-                            processed_users.append({
-                                "message": "No attendance record found for today",
-                                "user_id": user.user_id,
-                                "name": user.name,
-                                "similarity": similarity
-                            })
-                        else:
-                            # Delete the attendance record
-                            db.delete(existing_attendance)
-                            db.commit()
-                            
-                            # Create attendance update
-                            attendance_update = {
-                                "action": "exit",
-                                "user_id": user.user_id,
-                                "name": user.name,
-                                "timestamp": get_local_time().isoformat(),
-                                "similarity": similarity
-                            }
-                            attendance_updates.append(attendance_update)
-                            
-                            processed_users.append({
-                                "message": "Attendance exit recorded successfully",
-                                "user_id": user.user_id,
-                                "name": user.name,
-                                "similarity": similarity
-                            })
-                
-                # Broadcast attendance updates
-                if attendance_updates:
-                    logger.info(f"Broadcasting {len(attendance_updates)} attendance updates from WebSocket")
-                    await broadcast_attendance_update(attendance_updates)
-                
-                # Send response to client
-                await websocket.send_json({
-                    "multiple_users": True,
-                    "users": processed_users
-                })
+                # Add callback for when the future completes
+                future.add_done_callback(lambda f: handle_future_completion(f, websocket))
             
             elif data.get("type") == "ping":
                 # Respond to ping
