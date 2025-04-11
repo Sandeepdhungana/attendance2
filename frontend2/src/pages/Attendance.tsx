@@ -25,10 +25,20 @@ import {
   ListItemAvatar,
   Avatar,
   Chip,
+  TableContainer,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  IconButton,
+  Tooltip,
+  DialogContentText,
+  Paper,
 } from '@mui/material';
 import Webcam from 'react-webcam';
 import api from '../api/config';
-import { Login as LoginIcon, Logout as LogoutIcon, CloudUpload as CloudUploadIcon } from '@mui/icons-material';
+import { Login as LoginIcon, Logout as LogoutIcon, CloudUpload as CloudUploadIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useWebSocket } from '../App';
 import { SelectChangeEvent } from '@mui/material';
@@ -69,6 +79,14 @@ interface AttendanceUpdate {
   exit_time?: string;
 }
 
+interface EarlyExitReason {
+  id: number;
+  user_id: string;
+  name: string;
+  timestamp: string;
+  early_exit_message: string;
+}
+
 export default function Attendance() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -98,20 +116,14 @@ export default function Attendance() {
   const reconnectAttemptsRef = useRef<number>(0);
   const isConnectingRef = useRef<boolean>(false);
   const MAX_RECONNECT_ATTEMPTS = 5;
+  const [earlyExitReasons, setEarlyExitReasons] = useState<EarlyExitReason[]>([]);
   const [earlyExitDialog, setEarlyExitDialog] = useState<{
     open: boolean;
-    user: {
-      name: string;
-      user_id: string;
-      attendance_id?: number;
-    } | null;
-    reason: string;
+    reason: EarlyExitReason | null;
   }>({
     open: false,
-    user: null,
-    reason: '',
+    reason: null,
   });
-  const [earlyExitReasons, setEarlyExitReasons] = useState<any[]>([]);
 
   // Add WebSocket reconnection logic
   useEffect(() => {
@@ -232,22 +244,24 @@ export default function Attendance() {
               if (update.action === 'exit' && update.is_early_exit) {
                 setEarlyExitDialog({
                   open: true,
-                  user: {
-                    name: update.name,
+                  reason: {
+                    id: Number(update.attendance_id) || 0,
                     user_id: update.user_id,
-                    attendance_id: update.attendance_id
+                    name: update.name,
+                    timestamp: update.timestamp,
+                    early_exit_message: update.early_exit_message || ''
                   },
-                  reason: '',
                 });
               }
 
               // Handle early exit reason updates
               if (update.action === 'early_exit_reason') {
                 setEarlyExitReasons(prev => [{
+                  id: Number(update.attendance_id) || 0,
                   user_id: update.user_id,
                   name: update.name,
                   timestamp: update.timestamp,
-                  early_exit_message: update.early_exit_message
+                  early_exit_message: update.early_exit_message || ''
                 }, ...prev]);
               }
             });
@@ -534,10 +548,10 @@ export default function Attendance() {
   };
 
   const handleEarlyExitReason = async () => {
-    if (!earlyExitDialog.user?.attendance_id) {
+    if (!earlyExitDialog.reason) {
       setMessage({
         type: 'error',
-        text: 'Invalid attendance record',
+        text: 'Invalid early exit reason',
       });
       return;
     }
@@ -545,8 +559,7 @@ export default function Attendance() {
     try {
       // Create form data
       const formData = new FormData();
-      formData.append('attendance_id', earlyExitDialog.user.attendance_id.toString());
-      formData.append('reason', earlyExitDialog.reason);
+      formData.append('early_exit_message', earlyExitDialog.reason.early_exit_message);
 
       // Log the form data contents for debugging
       console.log('FormData contents:');
@@ -565,8 +578,7 @@ export default function Attendance() {
         // Close the dialog and reset the form
         setEarlyExitDialog({
           open: false,
-          user: null,
-          reason: '',
+          reason: null,
         });
 
         // Show success message
@@ -585,6 +597,38 @@ export default function Attendance() {
         type: 'error',
         text: error.response?.data?.detail || 'Failed to submit early exit reason',
       });
+    }
+  };
+
+  const handleDeleteEarlyExitReason = (reason: EarlyExitReason) => {
+    setEarlyExitDialog({
+      open: true,
+      reason,
+    });
+  };
+
+  const handleDeleteEarlyExitConfirm = async () => {
+    if (!earlyExitDialog.reason) return;
+
+    try {
+      // Send WebSocket message to delete the reason
+      sendMessage({
+        type: 'delete_early_exit_reason',
+        reason_id: earlyExitDialog.reason.id,
+      });
+
+      // Close the dialog
+      setEarlyExitDialog({
+        open: false,
+        reason: null,
+      });
+
+      // Remove the reason from the local state
+      setEarlyExitReasons((prev) => 
+        prev.filter((r) => r.id !== earlyExitDialog.reason?.id)
+      );
+    } catch (error) {
+      setError('Failed to delete early exit reason');
     }
   };
 
@@ -852,50 +896,63 @@ export default function Attendance() {
           )}
 
           {/* Early Exit Reasons Section */}
-          {earlyExitReasons.length > 0 && (
-            <Card variant="outlined" sx={{ mt: 2 }}>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  Early Exit Reasons
-                </Typography>
-                <List>
-                  {earlyExitReasons.map((reason, index) => (
-                    <div key={`${reason.user_id}-${reason.timestamp}-${index}`}>
-                      <ListItem>
-                        <ListItemText
-                          primary={`${reason.name} (${reason.user_id})`}
-                          secondary={
-                            <>
-                              <Typography component="span" variant="body2" color="text.primary">
-                                {reason.early_exit_message}
-                              </Typography>
-                              <Typography component="span" variant="body2" color="text.secondary">
-                                {' at '}
-                                {format(new Date(reason.timestamp), 'PPpp')}
-                              </Typography>
-                            </>
-                          }
-                        />
-                      </ListItem>
-                      {index < earlyExitReasons.length - 1 && <Divider />}
-                    </div>
+          <Box sx={{ mt: 4 }}>
+            <Typography variant="h6" gutterBottom>
+              Recent Early Exit Reasons
+            </Typography>
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>User</TableCell>
+                    <TableCell>Reason</TableCell>
+                    <TableCell>Timestamp</TableCell>
+                    <TableCell>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {earlyExitReasons.map((reason) => (
+                    <TableRow key={reason.id}>
+                      <TableCell>{reason.name}</TableCell>
+                      <TableCell>{reason.early_exit_message}</TableCell>
+                      <TableCell>
+                        {new Date(reason.timestamp).toLocaleString()}
+                      </TableCell>
+                      <TableCell>
+                        <Tooltip title="Delete reason">
+                          <IconButton
+                            color="error"
+                            onClick={() => handleDeleteEarlyExitReason(reason)}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </List>
-              </CardContent>
-            </Card>
-          )}
+                  {earlyExitReasons.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={4} align="center">
+                        No early exit reasons found
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
         </CardContent>
       </Card>
 
       {/* Early Exit Dialog */}
       <Dialog
         open={earlyExitDialog.open}
-        onClose={() => setEarlyExitDialog({ ...earlyExitDialog, open: false })}
+        onClose={() => setEarlyExitDialog({ open: false, reason: null })}
       >
         <DialogTitle>Early Exit Reason</DialogTitle>
         <DialogContent>
           <Typography variant="body1" gutterBottom>
-            Hey {earlyExitDialog.user?.name}, why are you leaving early?
+            Hey {earlyExitDialog.reason?.name}, why are you leaving early?
           </Typography>
           <TextField
             autoFocus
@@ -904,22 +961,59 @@ export default function Attendance() {
             fullWidth
             multiline
             rows={4}
-            value={earlyExitDialog.reason}
-            onChange={(e) => setEarlyExitDialog({ ...earlyExitDialog, reason: e.target.value })}
+            value={earlyExitDialog.reason?.early_exit_message || ''}
+            onChange={(e) => {
+              if (earlyExitDialog.reason) {
+                setEarlyExitDialog({
+                  open: true,
+                  reason: {
+                    id: Number(earlyExitDialog.reason.id) || 0,
+                    user_id: earlyExitDialog.reason.user_id,
+                    name: earlyExitDialog.reason.name,
+                    timestamp: earlyExitDialog.reason.timestamp,
+                    early_exit_message: e.target.value
+                  }
+                });
+              }
+            }}
             placeholder="Please provide a reason for leaving early..."
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEarlyExitDialog({ ...earlyExitDialog, open: false })}>
+          <Button onClick={() => setEarlyExitDialog({ open: false, reason: null })}>
             Cancel
           </Button>
           <Button 
             onClick={handleEarlyExitReason} 
             variant="contained" 
             color="primary"
-            disabled={!earlyExitDialog.reason.trim()}
+            disabled={!earlyExitDialog.reason?.early_exit_message.trim()}
           >
             Submit
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Early Exit Reason Dialog */}
+      <Dialog
+        open={earlyExitDialog.open}
+        onClose={() => setEarlyExitDialog({ open: false, reason: null })}
+      >
+        <DialogTitle>Delete Early Exit Reason</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to delete this early exit reason for{' '}
+            {earlyExitDialog.reason?.name}?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setEarlyExitDialog({ open: false, reason: null })}
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleDeleteEarlyExitConfirm} color="error" variant="contained">
+            Delete
           </Button>
         </DialogActions>
       </Dialog>

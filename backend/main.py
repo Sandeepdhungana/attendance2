@@ -602,6 +602,26 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                 # Respond to ping
                 await websocket.send_json({"type": "pong"})
 
+            elif data.get("type") == "delete_early_exit_reason":
+                # Delete early exit reason
+                reason_id = data.get("reason_id")
+                if reason_id:
+                    reason = db.query(models.EarlyExitReason).filter(
+                        models.EarlyExitReason.id == reason_id).first()
+                    if reason:
+                        user = db.query(models.User).filter(
+                            models.User.user_id == reason.user_id).first()
+                        db.delete(reason)
+                        db.commit()
+                        await broadcast_attendance_update([{
+                            "action": "delete_early_exit_reason",
+                            "user_id": reason.user_id,
+                            "name": user.name if user else "Unknown",
+                            "attendance_id": reason.attendance_id,
+                            "reason_id": reason_id,
+                            "timestamp": get_local_time().isoformat()
+                        }])
+
     except WebSocketDisconnect:
         if client_id in active_connections:
             del active_connections[client_id]
@@ -1250,3 +1270,42 @@ def delete_user(user_id: str, db: Session = Depends(get_db)):
 
     logger.info(f"User deleted successfully: {user_id}")
     return {"message": "User deleted successfully"}
+
+@app.delete("/early-exit-reasons/{reason_id}")
+def delete_early_exit_reason(reason_id: int, db: Session = Depends(get_db)):
+    """Delete an early exit reason"""
+    # Find the early exit reason
+    reason = db.query(models.EarlyExitReason).filter(
+        models.EarlyExitReason.id == reason_id).first()
+    if not reason:
+        raise HTTPException(
+            status_code=404, detail="Early exit reason not found")
+
+    # Store info before deletion for broadcasting
+    user_id = reason.user_id
+    user = db.query(models.User).filter(models.User.user_id == user_id).first()
+    user_name = user.name if user else "Unknown"
+    attendance_id = reason.attendance_id
+
+    # Delete the early exit reason
+    db.delete(reason)
+    db.commit()
+
+    # Create update for broadcasting
+    update = {
+        "action": "delete_early_exit_reason",
+        "user_id": user_id,
+        "name": user_name,
+        "attendance_id": attendance_id,
+        "reason_id": reason_id,
+        "timestamp": get_local_time().isoformat()
+    }
+
+    # Add the update to the processing results queue
+    processing_results_queue.put({
+        "type": "attendance_update",
+        "data": [update]
+    })
+
+    logger.info(f"Early exit reason deleted successfully: ID {reason_id}")
+    return {"message": "Early exit reason deleted successfully"}
