@@ -10,15 +10,11 @@ import json
 import asyncio
 import logging
 import pytz
-import multiprocessing
-from multiprocessing import Process, Queue, Manager
 import concurrent.futures
 import threading
-from queue import Queue as ThreadQueue
+from queue import Queue
 import time
 import os
-import signal
-import uuid
 
 import models
 import database
@@ -45,23 +41,24 @@ app.add_middleware(
 )
 
 # Store active WebSocket connections
-active_connections = {}
+active_connections = set()
 
-# Create a process pool for image processing
-process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count())
+# Create a thread pool for image processing
+thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
-# Create multiprocessing queues
-manager = Manager()
-processing_results_queue = manager.Queue(maxsize=100)
-websocket_responses_queue = manager.Queue(maxsize=100)
+# Queue for processing results
+processing_results_queue = Queue(maxsize=100)
+
+# Queue for WebSocket responses
+websocket_responses_queue = Queue(maxsize=100)
 
 # Dictionary to store pending futures
 pending_futures = {}
 
 # User cache to avoid frequent database queries
-user_cache = manager.dict()
-user_cache_lock = manager.Lock()
-user_cache_last_updated = manager.Value('d', 0)
+user_cache = {}
+user_cache_lock = threading.Lock()
+user_cache_last_updated = 0
 USER_CACHE_TTL = 300  # 5 minutes
 
 # WebSocket ping interval in seconds (30 seconds)
@@ -77,8 +74,8 @@ MAX_FRAMES_PER_SECOND = 1
 MAX_CONCURRENT_TASKS_PER_CLIENT = 2
 
 # Dictionary to track number of pending tasks per client
-client_pending_tasks = manager.dict()
-client_pending_tasks_lock = manager.Lock()
+client_pending_tasks = {}
+client_pending_tasks_lock = threading.Lock()
 
 # Get local timezone
 try:
@@ -86,7 +83,8 @@ try:
     local_tz = pytz.timezone('Asia/Kolkata')
 except:
     # Fallback if pytz is not available
-    local_tz = timezone(timedelta(hours=5, minutes=30))  # IST offset as fallback
+    local_tz = timezone(timedelta(hours=5, minutes=30)
+                        )  # IST offset as fallback
 
 # Create images directory if it doesn't exist
 IMAGES_DIR = "images"
@@ -94,16 +92,6 @@ if not os.path.exists(IMAGES_DIR):
     os.makedirs(IMAGES_DIR)
     logger.info(f"Created images directory: {IMAGES_DIR}")
 
-# Process cleanup handler
-def cleanup_processes():
-    """Clean up all processes when the application exits"""
-    for process in multiprocessing.active_children():
-        process.terminate()
-    process_pool.shutdown(wait=True)
-
-# Register cleanup handler
-signal.signal(signal.SIGTERM, lambda signum, frame: cleanup_processes())
-signal.signal(signal.SIGINT, lambda signum, frame: cleanup_processes())
 
 def get_cached_users(db: Session):
     """Get users from cache or database with TTL"""
@@ -111,12 +99,11 @@ def get_cached_users(db: Session):
 
     current_time = time.time()
     with user_cache_lock:
-        if current_time - user_cache_last_updated.value > USER_CACHE_TTL or not user_cache:
+        if current_time - user_cache_last_updated > USER_CACHE_TTL or not user_cache:
             # Update cache
             users = db.query(models.User).all()
-            user_cache.clear()
-            user_cache.update({user.user_id: user for user in users})
-            user_cache_last_updated.value = current_time
+            user_cache = {user.user_id: user for user in users}
+            user_cache_last_updated = current_time
             logger.info("User cache updated")
         return list(user_cache.values())
 
@@ -150,18 +137,18 @@ async def process_queue():
 # Function to handle future completion
 
 
-def handle_future_completion(future, client_id):
+def handle_future_completion(future, websocket):
     try:
         processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
 
         # Decrement pending tasks counter
         with client_pending_tasks_lock:
-            if client_id in client_pending_tasks:
-                client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+            if websocket in client_pending_tasks:
+                client_pending_tasks[websocket] = max(0, client_pending_tasks[websocket] - 1)
 
         # Put the results in the websocket responses queue
         websocket_responses_queue.put({
-            "client_id": client_id,
+            "websocket": websocket,
             "processed_users": processed_users,
             "attendance_updates": attendance_updates,
             "last_recognized_users": last_recognized_users,
@@ -171,17 +158,17 @@ def handle_future_completion(future, client_id):
         logger.error(f"Error handling future completion: {str(e)}")
         # Decrement pending tasks counter even on error
         with client_pending_tasks_lock:
-            if client_id in client_pending_tasks:
-                client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+            if websocket in client_pending_tasks:
+                client_pending_tasks[websocket] = max(0, client_pending_tasks[websocket] - 1)
         # Put error in the queue
         websocket_responses_queue.put({
-            "client_id": client_id,
+            "websocket": websocket,
             "error": str(e)
         })
     finally:
         # Clean up the future from pending_futures
         for key, value in list(pending_futures.items()):
-            if value == client_id:
+            if value == future:
                 del pending_futures[key]
                 break
 
@@ -196,15 +183,13 @@ async def process_websocket_responses():
             if not websocket_responses_queue.empty():
                 # Get the next item from the queue
                 item = websocket_responses_queue.get()
-                client_id = item["client_id"]
+                websocket = item["websocket"]
 
-                # Check if the client is still connected
-                if client_id not in active_connections:
-                    logger.info(f"Skipping response to disconnected client {client_id}")
+                # Check if the websocket is still in active_connections
+                if websocket not in active_connections:
+                    logger.info("Skipping response to disconnected WebSocket")
                     websocket_responses_queue.task_done()
                     continue
-
-                websocket = active_connections[client_id]
 
                 # Check if this is an error response
                 if "error" in item:
@@ -212,10 +197,10 @@ async def process_websocket_responses():
                         await websocket.send_json({"status": "processing_error", "message": item["error"]})
                     except Exception as e:
                         logger.error(
-                            f"Error sending error response to client {client_id}: {str(e)}")
-                        # Remove the client from active connections if it's causing errors
-                        if client_id in active_connections:
-                            del active_connections[client_id]
+                            f"Error sending error response to WebSocket: {str(e)}")
+                        # Remove the websocket from active connections if it's causing errors
+                        if websocket in active_connections:
+                            active_connections.remove(websocket)
                     continue
 
                 # Process the results
@@ -229,18 +214,18 @@ async def process_websocket_responses():
                             await websocket.send_json({"status": "no_face_detected"})
                         except Exception as e:
                             logger.error(
-                                f"Error sending no_face_detected response to client {client_id}: {str(e)}")
-                            if client_id in active_connections:
-                                del active_connections[client_id]
+                                f"Error sending no_face_detected response: {str(e)}")
+                            if websocket in active_connections:
+                                active_connections.remove(websocket)
                     else:
                         # No matching users found
                         try:
                             await websocket.send_json({"status": "no_matching_users"})
                         except Exception as e:
                             logger.error(
-                                f"Error sending no_matching_users response to client {client_id}: {str(e)}")
-                            if client_id in active_connections:
-                                del active_connections[client_id]
+                                f"Error sending no_matching_users response: {str(e)}")
+                            if websocket in active_connections:
+                                active_connections.remove(websocket)
                 else:
                     # Send response with all processed users to the current client
                     try:
@@ -250,9 +235,9 @@ async def process_websocket_responses():
                         })
                     except Exception as e:
                         logger.error(
-                            f"Error sending processed_users response to client {client_id}: {str(e)}")
-                        if client_id in active_connections:
-                            del active_connections[client_id]
+                            f"Error sending processed_users response: {str(e)}")
+                        if websocket in active_connections:
+                            active_connections.remove(websocket)
 
                     # Add attendance updates to the queue for broadcasting
                     if attendance_updates:
@@ -300,21 +285,21 @@ async def broadcast_attendance_update(attendance_data):
 
     # Send to all connected clients
     disconnected_clients = []
-    for client_id, websocket in active_connections.items():
+    for connection in active_connections:
         try:
-            await websocket.send_json(message)
-            logger.debug(f"Successfully sent attendance update to client {client_id}")
+            await connection.send_json(message)
+            logger.debug(f"Successfully sent attendance update to client")
         except Exception as e:
-            logger.error(f"Error broadcasting to client {client_id}: {str(e)}")
+            logger.error(f"Error broadcasting to client: {str(e)}")
             # Mark for removal
-            disconnected_clients.append(client_id)
+            disconnected_clients.append(connection)
 
     # Remove any disconnected clients
-    for client_id in disconnected_clients:
-        if client_id in active_connections:
-            del active_connections[client_id]
+    for client in disconnected_clients:
+        if client in active_connections:
+            active_connections.remove(client)
             logger.info(
-                f"Removed disconnected client {client_id}. Remaining connections: {len(active_connections)}")
+                f"Removed disconnected client. Remaining connections: {len(active_connections)}")
 
 
 def get_local_time():
@@ -326,24 +311,31 @@ def get_local_date():
     """Get current date in local timezone"""
     return get_local_time().date()
 
-# Function to process image in a separate process
+# Function to process image in a separate thread
 
 
-def process_image_in_process(image_data: str, entry_type: str, client_id: str):
+def process_image_in_thread(image_data: str, entry_type: str, db_session: Session,
+                            last_recognized_users: Dict[str, Any], no_face_count: int):
     """
-    Process image in a separate process
+    Process image in a separate thread
 
     Args:
         image_data: Base64 encoded image data
         entry_type: Type of entry (entry or exit)
-        client_id: ID of the client making the request
+        db_session: Database session (will be closed and replaced with a new one)
+        last_recognized_users: Dictionary tracking recognized users
+        no_face_count: Counter for frames with no face
 
     Returns:
         Tuple of (processed_users, attendance_updates, last_recognized_users, no_face_count)
     """
-    # Create a new database session for this process
-    db = next(get_db())
+    # Create a new database session for this thread
+    thread_db = next(get_db())
+
     try:
+        # Close the passed session to avoid connection pool exhaustion
+        db_session.close()
+
         # Remove data URL prefix if present
         if "," in image_data:
             image_data = image_data.split(",")[1]
@@ -356,27 +348,40 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if img is None:
-            return [], [], {}, 0
+            return [], [], last_recognized_users, no_face_count
 
         # Get all face embeddings from the image
         face_embeddings = face_recognition.get_embeddings(img)
         if not face_embeddings:
-            return [], [], {}, 1
+            # No face detected, increment counter
+            no_face_count += 1
+
+            # If we've had multiple consecutive frames with no face, and we previously recognized users,
+            # we can assume they've left the frame
+            if no_face_count >= 3 and last_recognized_users:
+                logger.info(
+                    f"Users {list(last_recognized_users.keys())} appear to have left the frame")
+                last_recognized_users = {}
+                no_face_count = 0
+
+            return [], [], last_recognized_users, no_face_count
+
+        # Reset no face counter when faces are detected
+        no_face_count = 0
 
         # Get all users from the cache
-        users = get_cached_users(db)
+        users = get_cached_users(thread_db)
 
         # Find matches for all detected faces
         matches = face_recognition.find_matches_for_embeddings(
             face_embeddings, users)
 
         if not matches:
-            return [], [], {}, 0
+            return [], [], last_recognized_users, no_face_count
 
         # Process each matched user
         processed_users = []
         attendance_updates = []
-        last_recognized_users = {}
 
         for match in matches:
             user = match['user']
@@ -392,7 +397,7 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
 
             # Check if attendance already marked for today
             today = get_local_date()
-            existing_attendance = db.query(models.Attendance).filter(
+            existing_attendance = thread_db.query(models.Attendance).filter(
                 models.Attendance.user_id == user.user_id,
                 models.Attendance.timestamp >= today
             ).first()
@@ -412,8 +417,8 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
                         user_id=user.user_id,
                         confidence=similarity
                     )
-                    db.add(new_attendance)
-                    db.commit()
+                    thread_db.add(new_attendance)
+                    thread_db.commit()
 
                     # Create attendance update for broadcasting
                     attendance_update = {
@@ -442,8 +447,8 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
                     })
                 else:
                     # Delete the attendance record
-                    db.delete(existing_attendance)
-                    db.commit()
+                    thread_db.delete(existing_attendance)
+                    thread_db.commit()
 
                     # Create attendance update for broadcasting
                     attendance_update = {
@@ -462,14 +467,14 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
                         "similarity": similarity
                     })
 
-        return processed_users, attendance_updates, last_recognized_users, 0
+        return processed_users, attendance_updates, last_recognized_users, no_face_count
 
     except Exception as e:
-        logger.error(f"Error processing image in process: {str(e)}")
-        return [], [], {}, 0
+        logger.error(f"Error processing image in thread: {str(e)}")
+        return [], [], last_recognized_users, no_face_count
     finally:
-        # Always close the database session
-        db.close()
+        # Always close the thread's database session
+        thread_db.close()
 
 
 @app.post("/register")
@@ -531,17 +536,17 @@ async def ping_client(websocket: WebSocket):
 @app.websocket("/ws/attendance")
 async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)):
     await websocket.accept()
-    
-    # Generate unique client ID
-    client_id = str(uuid.uuid4())
-    active_connections[client_id] = websocket
-    
+    active_connections.add(websocket)
     logger.info(
-        f"New WebSocket connection {client_id}. Total connections: {len(active_connections)}")
+        f"New WebSocket connection. Total connections: {len(active_connections)}")
+
+    # Initialize thread-local variables
+    last_recognized_users = {}
+    no_face_count = 0
 
     # Initialize pending tasks counter for this client
     with client_pending_tasks_lock:
-        client_pending_tasks[client_id] = 0
+        client_pending_tasks[websocket] = 0
 
     try:
         while True:
@@ -694,43 +699,44 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
             elif "image" in data:
                 # Check if client has too many pending tasks
                 with client_pending_tasks_lock:
-                    if client_pending_tasks.get(client_id, 0) >= MAX_CONCURRENT_TASKS_PER_CLIENT:
+                    if client_pending_tasks.get(websocket, 0) >= MAX_CONCURRENT_TASKS_PER_CLIENT:
                         await websocket.send_json({
                             "status": "error",
                             "message": "Too many pending tasks. Please wait."
                         })
                         continue
-                    client_pending_tasks[client_id] += 1
+                    client_pending_tasks[websocket] += 1
 
                 # Process image for face recognition
                 entry_type = data.get("entry_type", "entry")
 
-                # Submit image processing to process pool
-                future = process_pool.submit(
-                    process_image_in_process,
+                # Submit image processing to thread pool
+                future = thread_pool.submit(
+                    process_image_in_thread,
                     data["image"],
                     entry_type,
-                    client_id
+                    db,
+                    last_recognized_users,
+                    no_face_count
                 )
 
-                # Store the future with client_id
-                pending_futures[future] = client_id
+                # Store the future
+                pending_futures[future] = websocket
 
                 # Add callback for when the future completes
                 future.add_done_callback(
-                    lambda f: handle_future_completion(f, client_id))
+                    lambda f: handle_future_completion(f, websocket))
 
             elif data.get("type") == "ping":
                 # Respond to ping
                 await websocket.send_json({"type": "pong"})
 
     except WebSocketDisconnect:
-        if client_id in active_connections:
-            del active_connections[client_id]
+        active_connections.remove(websocket)
         logger.info(
-            f"WebSocket connection {client_id} closed. Total connections: {len(active_connections)}")
+            f"WebSocket connection closed. Total connections: {len(active_connections)}")
     except Exception as e:
-        logger.error(f"WebSocket error for client {client_id}: {str(e)}")
+        logger.error(f"WebSocket error: {str(e)}")
         try:
             await websocket.send_json({
                 "status": "error",
@@ -740,89 +746,14 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
             pass
     finally:
         try:
-            if client_id in active_connections:
-                del active_connections[client_id]
+            active_connections.remove(websocket)
             with client_pending_tasks_lock:
-                if client_id in client_pending_tasks:
-                    del client_pending_tasks[client_id]
+                if websocket in client_pending_tasks:
+                    del client_pending_tasks[websocket]
         except KeyError:
             pass
         logger.info(
-            f"WebSocket connection {client_id} closed. Total connections: {len(active_connections)}")
-
-def client_process_handler(websocket: WebSocket, db: Session):
-    """
-    Handler for client process
-    """
-    try:
-        # Initialize process-local variables
-        last_recognized_users = {}
-        no_face_count = 0
-
-        # Process messages from the queue
-        while True:
-            try:
-                # Get message from queue
-                message = websocket_responses_queue.get(timeout=1)
-                if message.get("client_id") == websocket:
-                    # Process message
-                    if "error" in message:
-                        logger.error(f"Error in client process: {message['error']}")
-                    else:
-                        # Update process-local variables
-                        last_recognized_users = message.get("last_recognized_users", {})
-                        no_face_count = message.get("no_face_count", 0)
-            except Exception as e:
-                logger.error(f"Error in client process handler: {str(e)}")
-                break
-    except Exception as e:
-        logger.error(f"Client process error: {str(e)}")
-    finally:
-        # Clean up
-        if websocket in active_connections:
-            active_connections.remove(websocket)
-        with client_pending_tasks_lock:
-            if websocket in client_pending_tasks:
-                del client_pending_tasks[websocket]
-
-# # Function to save a frame to the images folder
-# def save_frame(image_data, prefix="frame"):
-#     """Save a frame to the images folder with a timestamp"""
-#     return
-#     try:
-#         # Remove data URL prefix if present
-#         if "," in image_data:
-#             image_data = image_data.split(",")[1]
-
-#         # Decode base64 to bytes
-#         image_bytes = base64.b64decode(image_data)
-
-#         # Convert to numpy array
-#         nparr = np.frombuffer(image_bytes, np.uint8)
-#         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-#         if img is None:
-#             logger.error("Failed to decode image data")
-#             return False
-
-#         # Generate filename with timestamp
-#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-#         filename = f"{prefix}_{timestamp}.jpg"
-#         filepath = os.path.join(IMAGES_DIR, filename)
-
-#         # Save the image
-#         # success = cv2.imwrite(filepath, img)
-#         success = False
-#         if success:
-#             logger.info(f"Saved frame to {filepath}")
-#             return True
-#         else:
-#             logger.error(f"Failed to save frame to {filepath}")
-#             return False
-#     except Exception as e:
-#         logger.error(f"Error saving frame: {str(e)}")
-#         return False
-
+            f"WebSocket connection closed. Total connections: {len(active_connections)}")
 
 @app.get("/users")
 def get_users(db: Session = Depends(get_db)):

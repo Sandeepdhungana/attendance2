@@ -63,7 +63,7 @@ class FaceRecognition:
             # Calculate cosine similarity
             similarity = np.dot(embedding1_norm, embedding2_norm)
             
-            logger.info(f"Face comparison similarity: {similarity}")
+            # logger.info(f"Face comparison similarity: {similarity}")
             return similarity
         except Exception as e:
             logger.error(f"Error comparing faces: {str(e)}")
