@@ -14,6 +14,10 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import api from '../api/config';
 
@@ -31,9 +35,14 @@ export default function OfficeTimings() {
   const [newLogoutTime, setNewLogoutTime] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [availableTimezones, setAvailableTimezones] = useState<string[]>([]);
+  const [selectedTimezone, setSelectedTimezone] = useState<string>('');
+  const [currentTimezone, setCurrentTimezone] = useState<string>('');
 
   useEffect(() => {
     fetchTimings();
+    fetchTimezones();
+    fetchCurrentTimezone();
   }, []);
 
   const fetchTimings = async () => {
@@ -42,6 +51,47 @@ export default function OfficeTimings() {
       setTimings(response.data);
     } catch (error) {
       setError('Failed to fetch office timings');
+    }
+  };
+
+  const fetchTimezones = async () => {
+    try {
+      const response = await api.get('/timezones');
+      setAvailableTimezones(response.data.timezones);
+    } catch (error) {
+      setError('Failed to fetch available timezones');
+    }
+  };
+
+  const fetchCurrentTimezone = async () => {
+    try {
+      const response = await api.get('/timezone');
+      setCurrentTimezone(response.data.timezone);
+      setSelectedTimezone(response.data.timezone);
+    } catch (error) {
+      setError('Failed to fetch current timezone');
+    }
+  };
+
+  const handleTimezoneChange = async () => {
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('timezone', selectedTimezone);
+
+      await api.post('/timezone', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      setSuccess('Timezone updated successfully');
+      setCurrentTimezone(selectedTimezone);
+      // Refresh timings after timezone change
+      fetchTimings();
+    } catch (error) {
+      setError('Failed to update timezone');
     }
   };
 
@@ -76,6 +126,42 @@ export default function OfficeTimings() {
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom>
+            Timezone Configuration
+          </Typography>
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body1" gutterBottom>
+              Current Timezone: {currentTimezone}
+            </Typography>
+            <FormControl fullWidth sx={{ mt: 2 }}>
+              <InputLabel>Select Timezone</InputLabel>
+              <Select
+                value={selectedTimezone}
+                label="Select Timezone"
+                onChange={(e) => setSelectedTimezone(e.target.value)}
+              >
+                {availableTimezones.map((tz) => (
+                  <MenuItem key={tz} value={tz}>
+                    {tz}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Button
+              variant="contained"
+              color="primary"
+              sx={{ mt: 2 }}
+              onClick={handleTimezoneChange}
+              disabled={selectedTimezone === currentTimezone}
+            >
+              Update Timezone
+            </Button>
+          </Box>
+        </CardContent>
+      </Card>
+
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
             Current Timings
           </Typography>
           <TableContainer component={Paper}>
@@ -83,7 +169,7 @@ export default function OfficeTimings() {
               <TableHead>
                 <TableRow>
                   <TableCell>Type</TableCell>
-                  <TableCell>Time</TableCell>
+                  <TableCell>Time ({currentTimezone})</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -120,6 +206,7 @@ export default function OfficeTimings() {
                 inputProps={{
                   step: 300, // 5 min
                 }}
+                helperText={`Time will be set in ${currentTimezone}`}
               />
             </Box>
             <Box sx={{ mb: 2 }}>
@@ -135,6 +222,7 @@ export default function OfficeTimings() {
                 inputProps={{
                   step: 300, // 5 min
                 }}
+                helperText={`Time will be set in ${currentTimezone}`}
               />
             </Box>
             {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}

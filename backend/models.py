@@ -1,7 +1,7 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Boolean, Time
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pytz
 
 Base = declarative_base()
@@ -62,4 +62,12 @@ class EarlyExitReason(Base):
     timestamp = Column(DateTime, default=get_local_time)
     
     user = relationship("User")
-    attendance = relationship("Attendance", back_populates="early_exit_reasons") 
+    attendance = relationship("Attendance", back_populates="early_exit_reasons")
+
+class TimezoneConfig(Base):
+    __tablename__ = "timezone_config"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    timezone_name = Column(String, nullable=False, default='Asia/Kolkata')
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)) 
