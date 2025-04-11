@@ -1207,8 +1207,8 @@ def get_attendance(db: Session = Depends(get_db)):
         {
             "id": att.id,
             "user_id": att.user_id,
-            "name": att.user.name if att.user else "Unknown",
-            "entry_time": att.timestamp.isoformat(),
+            "name": att.user.name if att.user else "Unknown User",
+            "entry_time": att.timestamp.isoformat() if att.timestamp else None,
             "exit_time": att.exit_time.isoformat() if att.exit_time else None,
             "confidence": att.confidence,
             "is_late": att.is_late,

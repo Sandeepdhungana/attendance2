@@ -1,238 +1,189 @@
-import { useState, useEffect } from 'react';
-import {
-  Box,
+import React from 'react';
+import { 
+  Box, 
+  Typography, 
+  Paper, 
+  Container, 
+  Alert, 
+  Button, 
+  TextField, 
+  Grid,
+  Divider,
+  Stack,
   Card,
   CardContent,
-  Typography,
-  TextField,
-  Button,
-  Alert,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
+  CardHeader,
 } from '@mui/material';
-import api from '../api/config';
+import { useOfficeTimings } from '../hooks/useOfficeTimings';
+import { TimingsTable } from '../components/officeTimings/TimingsTable';
+import { TimezoneSelector } from '../components/officeTimings/TimezoneSelector';
+import { OfficeTiming } from '../types/officeTimings';
 
-interface OfficeTiming {
-  login_time: string | null;
-  logout_time: string | null;
-}
+const OfficeTimings: React.FC = () => {
+  const {
+    timings,
+    loading,
+    error,
+    currentTimezone,
+    handleAddTiming,
+    handleTimezoneChange,
+    newTiming,
+    setNewTiming,
+  } = useOfficeTimings();
 
-export default function OfficeTimings() {
-  const [timings, setTimings] = useState<OfficeTiming>({
-    login_time: null,
-    logout_time: null,
-  });
-  const [newLoginTime, setNewLoginTime] = useState('');
-  const [newLogoutTime, setNewLogoutTime] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [availableTimezones, setAvailableTimezones] = useState<string[]>([]);
-  const [selectedTimezone, setSelectedTimezone] = useState<string>('');
-  const [currentTimezone, setCurrentTimezone] = useState<string>('');
-
-  useEffect(() => {
-    fetchTimings();
-    fetchTimezones();
-    fetchCurrentTimezone();
-  }, []);
-
-  const fetchTimings = async () => {
-    try {
-      const response = await api.get('/office-timings');
-      setTimings(response.data);
-    } catch (error) {
-      setError('Failed to fetch office timings');
-    }
-  };
-
-  const fetchTimezones = async () => {
-    try {
-      const response = await api.get('/timezones');
-      setAvailableTimezones(response.data.timezones);
-    } catch (error) {
-      setError('Failed to fetch available timezones');
-    }
-  };
-
-  const fetchCurrentTimezone = async () => {
-    try {
-      const response = await api.get('/timezone');
-      setCurrentTimezone(response.data.timezone);
-      setSelectedTimezone(response.data.timezone);
-    } catch (error) {
-      setError('Failed to fetch current timezone');
-    }
-  };
-
-  const handleTimezoneChange = async () => {
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const formData = new FormData();
-      formData.append('timezone', selectedTimezone);
-
-      await api.post('/timezone', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      setSuccess('Timezone updated successfully');
-      setCurrentTimezone(selectedTimezone);
-      // Refresh timings after timezone change
-      fetchTimings();
-    } catch (error) {
-      setError('Failed to update timezone');
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const formData = new FormData();
-      formData.append('login_time', newLoginTime);
-      formData.append('logout_time', newLogoutTime);
-
-      await api.post('/office-timings', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      setSuccess('Office timings updated successfully');
-      fetchTimings();
-    } catch (error) {
-      setError('Failed to update office timings');
-    }
+    handleAddTiming();
   };
 
   return (
-    <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
-      <Typography variant="h4" gutterBottom>
-        Office Timings
-      </Typography>
+    <Container maxWidth="lg">
+      <Box sx={{ my: 4 }}>
+        <Typography 
+          variant="h4" 
+          component="h1" 
+          gutterBottom
+          sx={{ 
+            fontWeight: 600,
+            color: 'primary.main',
+            mb: 4
+          }}
+        >
+          Office Timings
+        </Typography>
 
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom>
-            Timezone Configuration
-          </Typography>
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="body1" gutterBottom>
-              Current Timezone: {currentTimezone}
-            </Typography>
-            <FormControl fullWidth sx={{ mt: 2 }}>
-              <InputLabel>Select Timezone</InputLabel>
-              <Select
-                value={selectedTimezone}
-                label="Select Timezone"
-                onChange={(e) => setSelectedTimezone(e.target.value)}
-              >
-                {availableTimezones.map((tz) => (
-                  <MenuItem key={tz} value={tz}>
-                    {tz}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Button
-              variant="contained"
-              color="primary"
-              sx={{ mt: 2 }}
-              onClick={handleTimezoneChange}
-              disabled={selectedTimezone === currentTimezone}
-            >
-              Update Timezone
-            </Button>
-          </Box>
-        </CardContent>
-      </Card>
+        {error && (
+          <Alert 
+            severity="error" 
+            sx={{ 
+              mb: 3,
+              borderRadius: 2
+            }}
+          >
+            {error}
+          </Alert>
+        )}
 
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom>
-            Current Timings
-          </Typography>
-          <TableContainer component={Paper}>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Type</TableCell>
-                  <TableCell>Time ({currentTimezone})</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                <TableRow>
-                  <TableCell>Login Time</TableCell>
-                  <TableCell>{timings.login_time || 'Not set'}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell>Logout Time</TableCell>
-                  <TableCell>{timings.logout_time || 'Not set'}</TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </CardContent>
-      </Card>
+        <Card 
+          elevation={2}
+          sx={{ 
+            mb: 4,
+            borderRadius: 2,
+            overflow: 'hidden'
+          }}
+        >
+          <CardHeader 
+            title="Timezone Settings"
+            titleTypographyProps={{
+              variant: 'h6',
+              fontWeight: 600
+            }}
+          />
+          <Divider />
+          <CardContent>
+            <TimezoneSelector
+              currentTimezone={currentTimezone}
+              onTimezoneChange={handleTimezoneChange}
+            />
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardContent>
-          <Typography variant="h6" gutterBottom>
-            Update Timings
-          </Typography>
-          <form onSubmit={handleSubmit}>
-            <Box sx={{ mb: 2 }}>
-              <TextField
-                fullWidth
-                label="Login Time"
-                type="time"
-                value={newLoginTime}
-                onChange={(e) => setNewLoginTime(e.target.value)}
-                InputLabelProps={{
-                  shrink: true,
-                }}
-                inputProps={{
-                  step: 300, // 5 min
-                }}
-                helperText={`Time will be set in ${currentTimezone}`}
-              />
-            </Box>
-            <Box sx={{ mb: 2 }}>
-              <TextField
-                fullWidth
-                label="Logout Time"
-                type="time"
-                value={newLogoutTime}
-                onChange={(e) => setNewLogoutTime(e.target.value)}
-                InputLabelProps={{
-                  shrink: true,
-                }}
-                inputProps={{
-                  step: 300, // 5 min
-                }}
-                helperText={`Time will be set in ${currentTimezone}`}
-              />
-            </Box>
-            {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-            {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
-            <Button type="submit" variant="contained" color="primary">
-              Update Timings
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-    </Box>
+        <Card 
+          elevation={2}
+          sx={{ 
+            mb: 4,
+            borderRadius: 2,
+            overflow: 'hidden'
+          }}
+        >
+          <CardHeader 
+            title="Add New Timing"
+            titleTypographyProps={{
+              variant: 'h6',
+              fontWeight: 600
+            }}
+          />
+          <Divider />
+          <CardContent>
+            <form onSubmit={handleSubmit}>
+              <Grid container spacing={3} alignItems="center">
+                <Grid item xs={12} sm={5}>
+                  <TextField
+                    fullWidth
+                    label="Login Time"
+                    type="time"
+                    value={newTiming.login_time}
+                    onChange={(e) => setNewTiming(prev => ({ ...prev, login_time: e.target.value }))}
+                    InputLabelProps={{
+                      shrink: true,
+                    }}
+                    inputProps={{
+                      step: 300, // 5 min
+                    }}
+                    size="medium"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={5}>
+                  <TextField
+                    fullWidth
+                    label="Logout Time"
+                    type="time"
+                    value={newTiming.logout_time}
+                    onChange={(e) => setNewTiming(prev => ({ ...prev, logout_time: e.target.value }))}
+                    InputLabelProps={{
+                      shrink: true,
+                    }}
+                    inputProps={{
+                      step: 300, // 5 min
+                    }}
+                    size="medium"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={2}>
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    color="primary"
+                    fullWidth
+                    disabled={loading}
+                    sx={{
+                      height: '100%',
+                      py: 1.5
+                    }}
+                  >
+                    Add
+                  </Button>
+                </Grid>
+              </Grid>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card 
+          elevation={2}
+          sx={{ 
+            borderRadius: 2,
+            overflow: 'hidden'
+          }}
+        >
+          <CardHeader 
+            title="Office Timings List"
+            titleTypographyProps={{
+              variant: 'h6',
+              fontWeight: 600
+            }}
+          />
+          <Divider />
+          <CardContent>
+            <TimingsTable
+              timings={timings}
+              loading={loading}
+            />
+          </CardContent>
+        </Card>
+      </Box>
+    </Container>
   );
-} 
+};
+
+export default OfficeTimings; 

@@ -1,149 +1,121 @@
-import { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import {
   Box,
   Card,
   CardContent,
   Typography,
-  CircularProgress,
   Alert,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   Tabs,
   Tab,
+  Chip,
+  IconButton,
 } from '@mui/material';
-import { DataGrid, GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
+import { GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import { format } from 'date-fns';
-import api from '../api/config';
 import { Delete as DeleteIcon } from '@mui/icons-material';
-import { useWebSocket } from '../App';
-
-interface AttendanceRecord {
-  id: number;
-  user_id: string;
-  name: string;
-  entry_time: string;
-  exit_time: string;
-  confidence: number;
-  is_late?: boolean;
-  is_early_exit?: boolean;
-  late_message?: string;
-  early_exit_message?: string;
-}
-
-interface User {
-  user_id: string;
-  name: string;
-  created_at: string;
-}
-
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-function TabPanel(props: TabPanelProps) {
-  const { children, value, index, ...other } = props;
-
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`simple-tabpanel-${index}`}
-      aria-labelledby={`simple-tab-${index}`}
-      {...other}
-    >
-      {value === index && (
-        <Box sx={{ p: 3 }}>
-          {children}
-        </Box>
-      )}
-    </div>
-  );
-}
+import { useDashboard } from '../hooks/useDashboard';
+import { TabPanel } from '../components/dashboard/TabPanel';
+import { DeleteDialog } from '../components/dashboard/DeleteDialog';
+import { DataTable } from '../components/dashboard/DataTable';
+import { AttendanceRecord, User } from '../types/dashboard';
 
 export default function Dashboard() {
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [recordsLoading, setRecordsLoading] = useState(true);
-  const [usersLoading, setUsersLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [tabValue, setTabValue] = useState(0);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [userToDelete, setUserToDelete] = useState<User | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const [attendanceDeleteDialogOpen, setAttendanceDeleteDialogOpen] = useState(false);
-  const [attendanceToDelete, setAttendanceToDelete] = useState<AttendanceRecord | null>(null);
-  const [attendanceDeleteLoading, setAttendanceDeleteLoading] = useState(false);
-  const { ws, isConnected, sendMessage } = useWebSocket();
-  const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 10 });
+  const {
+    records,
+    users,
+    recordsLoading,
+    usersLoading,
+    error,
+    tabValue,
+    userDeleteDialog,
+    attendanceDeleteDialog,
+    paginationModel,
+    handleTabChange,
+    handleUserDeleteClick,
+    handleUserDeleteConfirm,
+    handleAttendanceDeleteClick,
+    handleAttendanceDeleteConfirm,
+    setPaginationModel,
+    setUserDeleteDialog,
+    setAttendanceDeleteDialog,
+  } = useDashboard();
 
   const attendanceColumns: GridColDef[] = [
-    {
-      field: 'user_id',
-      headerName: 'User ID',
-      width: 150,
-    },
-    {
-      field: 'name',
-      headerName: 'Name',
-      width: 200,
-    },
-    {
-      field: 'entry_time',
-      headerName: 'Entry Time',
-      width: 200,
+    { field: 'id', headerName: 'ID', width: 70 },
+    { field: 'name', headerName: 'Name', width: 130 },
+    { 
+      field: 'entry_time', 
+      headerName: 'Entry Time', 
+      width: 180,
       valueFormatter: (params) => {
         if (!params.value) return 'Not recorded';
         const date = new Date(params.value);
-        return format(date, 'PPpp');
-      },
+        return date.toLocaleString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+      }
     },
-    {
-      field: 'exit_time',
-      headerName: 'Exit Time',
-      width: 200,
+    { 
+      field: 'exit_time', 
+      headerName: 'Exit Time', 
+      width: 180,
       valueFormatter: (params) => {
         if (!params.value) return 'Not recorded';
         const date = new Date(params.value);
-        return format(date, 'PPpp');
-      },
+        return date.toLocaleString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+      }
     },
-    {
-      field: 'confidence',
-      headerName: 'Confidence',
-      width: 130,
-      valueFormatter: (params) => `${(params.value * 100).toFixed(1)}%`,
+    { field: 'confidence', headerName: 'Confidence', width: 100 },
+    { 
+      field: 'is_late', 
+      headerName: 'Late', 
+      width: 100,
+      renderCell: (params) => (
+        <Chip 
+          label={params.value ? 'Yes' : 'No'} 
+          color={params.value ? 'error' : 'success'} 
+          size="small"
+        />
+      )
     },
-    {
-      field: 'status',
-      headerName: 'Status',
-      width: 200,
-      valueGetter: (params) => {
-        const row = params.row;
-        if (row.is_late && row.late_message) return row.late_message;
-        if (row.is_early_exit && row.early_exit_message) return row.early_exit_message;
-        return 'On time';
-      },
+    { 
+      field: 'is_early_exit', 
+      headerName: 'Early Exit', 
+      width: 120,
+      renderCell: (params) => (
+        <Chip 
+          label={params.value ? 'Yes' : 'No'} 
+          color={params.value ? 'error' : 'success'} 
+          size="small"
+        />
+      )
     },
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
-      renderCell: (params: GridRenderCellParams) => (
-        <Button
-          variant="outlined"
+      width: 100,
+      sortable: false,
+      renderCell: (params) => (
+        <IconButton
           color="error"
-          size="small"
-          startIcon={<DeleteIcon />}
           onClick={() => handleAttendanceDeleteClick(params.row)}
+          size="small"
         >
-          Delete
-        </Button>
+          <DeleteIcon />
+        </IconButton>
       ),
     },
   ];
@@ -175,7 +147,7 @@ export default function Dashboard() {
           color="error"
           size="small"
           startIcon={<DeleteIcon />}
-          onClick={() => handleDeleteClick(params.row)}
+          onClick={() => handleUserDeleteClick(params.row)}
         >
           Delete
         </Button>
@@ -183,268 +155,68 @@ export default function Dashboard() {
     },
   ];
 
-  const fetchRecords = async () => {
-    try {
-      setRecordsLoading(true);
-      const response = await api.get('/attendance');
-      console.log('Attendance API Response:', response.data);
-      
-      const validRecords = response.data.filter((record: any) => {
-        const isValid = record && 
-          typeof record.id === 'number' && 
-          typeof record.user_id === 'string' && 
-          typeof record.name === 'string' && 
-          record.entry_time && 
-          typeof record.confidence === 'number';
-        
-        if (!isValid) {
-          console.warn('Invalid record:', record);
-        }
-        return isValid;
-      });
-      
-      console.log('Valid records:', validRecords);
-      setRecords(validRecords);
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching attendance records:', err);
-      setError('Failed to fetch attendance records');
-    } finally {
-      setRecordsLoading(false);
-    }
-  };
-
-  const fetchUsers = async () => {
-    try {
-      setUsersLoading(true);
-      const response = await api.get('/users');
-      const validUsers = response.data.filter((user: any) => 
-        user && typeof user.user_id === 'string' && 
-        typeof user.name === 'string' && 
-        typeof user.created_at === 'string'
-      );
-      setUsers(validUsers);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch users');
-    } finally {
-      setUsersLoading(false);
-    }
-  };
-
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setTabValue(newValue);
-  };
-
-  const handleDeleteClick = (user: User) => {
-    setUserToDelete(user);
-    setDeleteDialogOpen(true);
-  };
-
-  const handleDeleteConfirm = async () => {
-    if (!userToDelete) return;
-    
-    setDeleteLoading(true);
-    try {
-      await api.delete(`/users/${userToDelete.user_id}`);
-      setDeleteDialogOpen(false);
-      fetchUsers(); // Refresh the user list
-    } catch (err) {
-      setError('Failed to delete user');
-    } finally {
-      setDeleteLoading(false);
-      setUserToDelete(null);
-    }
-  };
-
-  const handleDeleteCancel = () => {
-    setDeleteDialogOpen(false);
-    setUserToDelete(null);
-  };
-
-  const handleAttendanceDeleteClick = (attendance: AttendanceRecord) => {
-    setAttendanceToDelete(attendance);
-    setAttendanceDeleteDialogOpen(true);
-  };
-
-  const handleAttendanceDeleteConfirm = async () => {
-    if (!attendanceToDelete) return;
-    
-    setAttendanceDeleteLoading(true);
-    try {
-      await api.delete(`/attendance/${attendanceToDelete.id}`);
-      setAttendanceDeleteDialogOpen(false);
-      fetchRecords(); // Refresh the attendance records
-    } catch (err) {
-      setError('Failed to delete attendance record');
-    } finally {
-      setAttendanceDeleteLoading(false);
-      setAttendanceToDelete(null);
-    }
-  };
-
-  const handleAttendanceDeleteCancel = () => {
-    setAttendanceDeleteDialogOpen(false);
-    setAttendanceToDelete(null);
-  };
-
-  useEffect(() => {
-    // Initial data fetch
-    fetchRecords();
-    fetchUsers();
-  }, []); // Empty dependency array for initial fetch
-
-  // Separate WebSocket listener setup
-  useEffect(() => {
-    if (!ws) return;
-
-    const handleMessage = (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'attendance_update') {
-          fetchRecords();
-        }
-      } catch (error) {
-        console.error('Error processing attendance update:', error);
-      }
-    };
-
-    ws.addEventListener('message', handleMessage);
-
-    // Cleanup function to remove the event listener
-    return () => {
-      ws.removeEventListener('message', handleMessage);
-    };
-  }, [ws]); // Only re-run when WebSocket instance changes
-
   return (
-    <Box sx={{ height: '100%', width: '100%' }}>
+    <Box sx={{ maxWidth: 1600, mx: 'auto', p: 3 }}>
       <Typography variant="h4" gutterBottom>
         Dashboard
       </Typography>
 
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
       <Card>
-        <CardContent>
+        <CardContent sx={{ p: 0 }}>
           <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-            <Tabs value={tabValue} onChange={handleTabChange} aria-label="dashboard tabs">
+            <Tabs value={tabValue} onChange={handleTabChange}>
               <Tab label="Attendance Records" />
-              <Tab label="Registered Users" />
+              <Tab label="Users" />
             </Tabs>
           </Box>
 
           <TabPanel value={tabValue} index={0}>
-            {recordsLoading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                <CircularProgress />
-              </Box>
-            ) : error ? (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {error}
-              </Alert>
-            ) : (
-              <Box sx={{ height: 600, width: '100%' }}>
-                <DataGrid
-                  rows={records}
-                  columns={attendanceColumns}
-                  getRowId={(row) => row.id}
-                  paginationModel={paginationModel}
-                  onPaginationModelChange={(model) => setPaginationModel(model)}
-                  pageSizeOptions={[10, 25, 50]}
-                  disableRowSelectionOnClick
-                  sx={{
-                    '& .MuiDataGrid-cell': {
-                      fontSize: '1rem',
-                    },
-                  }}
-                />
-              </Box>
-            )}
+            <Box sx={{ p: 2 }}>
+              <DataTable<AttendanceRecord>
+                rows={records}
+                columns={attendanceColumns}
+                loading={recordsLoading}
+                paginationModel={paginationModel}
+                onPaginationModelChange={setPaginationModel}
+              />
+            </Box>
           </TabPanel>
 
           <TabPanel value={tabValue} index={1}>
-            {usersLoading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                <CircularProgress />
-              </Box>
-            ) : error ? (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {error}
-              </Alert>
-            ) : (
-              <Box sx={{ height: 600, width: '100%' }}>
-                <DataGrid
-                  rows={users}
-                  columns={userColumns}
-                  getRowId={(row) => row.user_id}
-                  paginationModel={paginationModel}
-                  onPaginationModelChange={(model) => setPaginationModel(model)}
-                  pageSizeOptions={[10, 25, 50]}
-                  disableRowSelectionOnClick
-                  sx={{
-                    '& .MuiDataGrid-cell': {
-                      fontSize: '1rem',
-                    },
-                  }}
-                />
-              </Box>
-            )}
+            <Box sx={{ p: 2 }}>
+              <DataTable<User>
+                rows={users}
+                columns={userColumns}
+                loading={usersLoading}
+                paginationModel={paginationModel}
+                onPaginationModelChange={setPaginationModel}
+              />
+            </Box>
           </TabPanel>
         </CardContent>
       </Card>
 
-      {/* Delete Confirmation Dialog for Users */}
-      <Dialog
-        open={deleteDialogOpen}
-        onClose={handleDeleteCancel}
-      >
-        <DialogTitle>Delete User</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Are you sure you want to delete user {userToDelete?.name} ({userToDelete?.user_id})? This action cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleDeleteCancel} disabled={deleteLoading}>
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleDeleteConfirm} 
-            color="error" 
-            variant="contained"
-            disabled={deleteLoading}
-            startIcon={deleteLoading ? <CircularProgress size={20} color="inherit" /> : null}
-          >
-            {deleteLoading ? 'Deleting...' : 'Delete'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <DeleteDialog<User>
+        dialog={userDeleteDialog}
+        title="Delete User"
+        getContentText={(user) => `Are you sure you want to delete user ${user.name}?`}
+        onClose={() => setUserDeleteDialog(prev => ({ ...prev, open: false }))}
+        onConfirm={handleUserDeleteConfirm}
+      />
 
-      {/* Delete Confirmation Dialog for Attendance Records */}
-      <Dialog
-        open={attendanceDeleteDialogOpen}
-        onClose={handleAttendanceDeleteCancel}
-      >
-        <DialogTitle>Delete Attendance Record</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Are you sure you want to delete this attendance record for user {attendanceToDelete?.user_id} from {attendanceToDelete ? format(new Date(attendanceToDelete.entry_time), 'PPpp') : ''}? This action cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleAttendanceDeleteCancel} disabled={attendanceDeleteLoading}>
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleAttendanceDeleteConfirm} 
-            color="error" 
-            variant="contained"
-            disabled={attendanceDeleteLoading}
-            startIcon={attendanceDeleteLoading ? <CircularProgress size={20} color="inherit" /> : null}
-          >
-            {attendanceDeleteLoading ? 'Deleting...' : 'Delete'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <DeleteDialog<AttendanceRecord>
+        dialog={attendanceDeleteDialog}
+        title="Delete Attendance Record"
+        getContentText={(record) => `Are you sure you want to delete the attendance record for ${record.name}?`}
+        onClose={() => setAttendanceDeleteDialog(prev => ({ ...prev, open: false }))}
+        onConfirm={handleAttendanceDeleteConfirm}
+      />
     </Box>
   );
 } 
