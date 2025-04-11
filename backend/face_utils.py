@@ -36,8 +36,8 @@ class FaceRecognition:
                 return []
             
             logger.info(f"Found {len(faces)} faces")
-            # Return all face embeddings
-            return [(face.embedding, face.bbox) for face in faces]
+            # Return only face embeddings
+            return [face.embedding for face in faces]
         except Exception as e:
             logger.error(f"Error extracting face embeddings: {str(e)}")
             return []
@@ -48,7 +48,7 @@ class FaceRecognition:
         if not embeddings:
             return None
         logger.info(f"Found {len(embeddings)} faces, using the first one")
-        return embeddings[0][0]  # Return just the embedding of the first face
+        return embeddings[0]  # Return just the embedding of the first face
 
     def compare_faces(self, embedding1, embedding2):
         """Compare two face embeddings using cosine similarity"""
@@ -91,14 +91,14 @@ class FaceRecognition:
         similarity = self.compare_faces(query_embedding, stored_embedding)
         return user, similarity
 
-    def find_matches_for_embeddings(self, query_embeddings: List[Tuple[np.ndarray, Any]], users: List[Any], threshold: float = None) -> List[Dict[str, Any]]:
+    def find_matches_for_embeddings(self, query_embeddings: List[np.ndarray], users: List[Any], threshold: float = None) -> List[Dict[str, Any]]:
         """Find matches for multiple face embeddings using parallel processing"""
         if threshold is None:
             threshold = self.threshold
             
         matches = []
         
-        for query_embedding, bbox in query_embeddings:
+        for query_embedding in query_embeddings:
             # Submit all user comparisons to thread pool
             futures = []
             for user in users:
@@ -123,8 +123,7 @@ class FaceRecognition:
             if best_similarity >= threshold and best_match:
                 matches.append({
                     'user': best_match,
-                    'similarity': best_similarity,
-                    'bbox': bbox
+                    'similarity': best_similarity
                 })
                 
         return matches

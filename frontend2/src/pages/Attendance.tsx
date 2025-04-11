@@ -17,6 +17,14 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  ListItemAvatar,
+  Avatar,
+  Chip,
 } from '@mui/material';
 import Webcam from 'react-webcam';
 import api from '../api/config';
@@ -30,20 +38,21 @@ interface UserResult {
   user_id: string;
   name: string;
   timestamp?: string;
-  similarity: number;
+  similarity?: number;
+  is_late?: boolean;
+  is_early_exit?: boolean;
+  late_message?: string;
+  early_exit_message?: string;
+  attendance_id?: number;
 }
 
 interface WebSocketResponse {
+  type?: string;
+  status?: string;
+  message?: string;
   multiple_users?: boolean;
   users?: UserResult[];
-  error?: string;
-  message?: string;
-  user_id?: string;
-  name?: string;
-  timestamp?: string;
-  status?: string;
-  type?: string;
-  data?: any;
+  data?: any[];
 }
 
 interface AttendanceUpdate {
@@ -51,6 +60,13 @@ interface AttendanceUpdate {
   name: string;
   entry_type: 'entry' | 'exit';
   timestamp: string;
+  is_late?: boolean;
+  is_early_exit?: boolean;
+  late_message?: string;
+  early_exit_message?: string;
+  similarity?: number;
+  entry_time?: string;
+  exit_time?: string;
 }
 
 export default function Attendance() {
@@ -82,123 +98,237 @@ export default function Attendance() {
   const reconnectAttemptsRef = useRef<number>(0);
   const isConnectingRef = useRef<boolean>(false);
   const MAX_RECONNECT_ATTEMPTS = 5;
+  const [earlyExitDialog, setEarlyExitDialog] = useState<{
+    open: boolean;
+    user: {
+      name: string;
+      user_id: string;
+      attendance_id?: number;
+    } | null;
+    reason: string;
+  }>({
+    open: false,
+    user: null,
+    reason: '',
+  });
+  const [earlyExitReasons, setEarlyExitReasons] = useState<any[]>([]);
 
-  // Remove WebSocket connection management
+  // Add WebSocket reconnection logic
   useEffect(() => {
-    if (ws) {
-      ws.onmessage = (event) => {
-        try {
-          const data: WebSocketResponse = JSON.parse(event.data);
-          
-          // Handle different message types
-          if (data.type === 'attendance_update') {
-            // Process attendance updates
+    if (!ws || !isConnected) {
+      // Try to reconnect if connection is lost
+      if (!isConnectingRef.current && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        isConnectingRef.current = true;
+        reconnectAttemptsRef.current++;
+        
+        // Clear any existing timeout
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        
+        // Set a new timeout for reconnection
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          isConnectingRef.current = false;
+          // The actual reconnection will be handled by the WebSocket context
+        }, 2000); // Wait 2 seconds before attempting to reconnect
+      }
+    } else {
+      // Reset reconnection attempts when connected
+      reconnectAttemptsRef.current = 0;
+      isConnectingRef.current = false;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    }
+
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, [ws, isConnected]);
+
+  // Update WebSocket message handler
+  useEffect(() => {
+    if (!ws) return;
+
+    const handleWebSocketMessage = (event: MessageEvent) => {
+      try {
+        const data: WebSocketResponse = JSON.parse(event.data);
+        // console.log('Received WebSocket message:', data);
+        
+        // Handle different message types
+        if (data.type === 'attendance_update') {
+          // Process attendance updates
+          if (data.data) {
             data.data.forEach((update: {
-              action: 'entry' | 'exit' | 'delete';
+              action: 'entry' | 'exit' | 'delete' | 'early_exit_reason';
               user_id: string;
               name: string;
               timestamp: string;
               similarity?: number;
               attendance_id?: number;
+              is_late?: boolean;
+              is_early_exit?: boolean;
+              late_message?: string;
+              early_exit_message?: string;
+              entry_time?: string;
+              exit_time?: string;
             }) => {
               // Convert the action to entry_type format expected by the UI
-              const entry_type = update.action === 'delete' ? 'exit' : update.action;
+              const entry_type = update.action === 'delete' ? 'exit' : 
+                               update.action === 'early_exit_reason' ? 'exit' : 
+                               update.action;
               
               // Create an attendance update object
               const attendanceUpdate: AttendanceUpdate = {
                 user_id: update.user_id,
                 name: update.name,
-                entry_type: entry_type,
-                timestamp: update.timestamp
+                entry_type: entry_type as 'entry' | 'exit',
+                timestamp: update.timestamp,
+                is_late: update.is_late,
+                is_early_exit: update.is_early_exit,
+                late_message: update.late_message,
+                early_exit_message: update.early_exit_message,
+                similarity: update.similarity,
+                entry_time: update.entry_time,
+                exit_time: update.exit_time
               };
               
-              // Add the new attendance to the recent list
+              // Update recent attendance with the new update
               setRecentAttendance(prev => {
                 const newList = [attendanceUpdate, ...prev];
-                // Keep only the 10 most recent entries
                 return newList.slice(0, 10);
               });
               
-              // Show a notification
+              // Format the timestamp
               const localTime = format(new Date(update.timestamp), 'PPpp');
+              
+              // Create a detailed message
+              let messageText = `${update.name} (${update.user_id}) marked ${entry_type} at ${localTime}`;
+              if (update.similarity !== undefined) {
+                messageText += ` - Confidence: ${(update.similarity * 100).toFixed(1)}%`;
+              }
+              if (update.entry_time) {
+                messageText += ` - Entry: ${format(new Date(update.entry_time), 'HH:mm')}`;
+              }
+              if (update.exit_time) {
+                messageText += ` - Exit: ${format(new Date(update.exit_time), 'HH:mm')}`;
+              }
+              if (update.is_late && update.late_message) {
+                messageText += ` - ${update.late_message}`;
+              }
+              if (update.is_early_exit && update.early_exit_message) {
+                messageText += ` - ${update.early_exit_message}`;
+              }
+              
+              // Update the message state
               setMessage({
                 type: 'success',
-                text: `${update.name} (${update.user_id}) marked ${entry_type} at ${localTime}`,
+                text: messageText,
               });
-            });
-          } 
-          else if (data.type === 'attendance_data') {
-            // Update attendance data
-            setAttendanceData(data.data || []);
-          }
-          else if (data.type === 'user_data') {
-            // Update user data
-            setUserData(data.data || []);
-          }
-          else if (data.type === 'ping') {
-            // Respond to ping with pong
-            sendMessage({ type: 'pong' });
-          }
-          else if (data.multiple_users && data.users) {
-            // Handle multiple users
-            setMultipleUsers(data.users);
-            setFaceCount(data.users.length);
-            
-            // Create a summary message
-            const successCount = data.users.filter((u: UserResult) => 
-              u.message.includes('successfully') || 
-              u.message.includes('already marked')
-            ).length;
-            
-            if (successCount > 0) {
-              setMessage({
-                type: 'success',
-                text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
-              });
-            } else {
-              setMessage({
-                type: 'error',
-                text: 'No users were processed successfully',
-              });
-            }
-          }
-          else if (data.status === 'rate_limited') {
-            // Handle rate limiting
-            console.log('Rate limited by server, skipping frame');
-          }
-          else if (data.status === 'no_face_detected') {
-            // Handle no face detected
-            setFaceCount(0);
-          }
-          else if (data.status === 'no_matching_users') {
-            // Handle no matching users
-            setMultipleUsers([]);
-            setFaceCount(0);
-          }
-          else if (data.status === 'error') {
-            // Handle error
-            setMessage({
-              type: 'error',
-              text: data.message || 'An error occurred',
+
+              // Check for early exit
+              if (update.action === 'exit' && update.is_early_exit) {
+                setEarlyExitDialog({
+                  open: true,
+                  user: {
+                    name: update.name,
+                    user_id: update.user_id,
+                    attendance_id: update.attendance_id
+                  },
+                  reason: '',
+                });
+              }
+
+              // Handle early exit reason updates
+              if (update.action === 'early_exit_reason') {
+                setEarlyExitReasons(prev => [{
+                  user_id: update.user_id,
+                  name: update.name,
+                  timestamp: update.timestamp,
+                  early_exit_message: update.early_exit_message
+                }, ...prev]);
+              }
             });
           }
-          else if (data.status === 'success') {
-            // Handle success
+        } 
+        else if (data.multiple_users && data.users) {
+          // Update multiple users state
+          setMultipleUsers(data.users);
+          setFaceCount(data.users.length);
+          
+          // Process success messages
+          const successCount = data.users.filter((u: UserResult) => 
+            u.message.includes('successfully') || 
+            u.message.includes('already marked')
+          ).length;
+          
+          if (successCount > 0) {
             setMessage({
               type: 'success',
-              text: data.message || 'Operation successful',
+              text: `Successfully processed ${successCount} user${successCount > 1 ? 's' : ''}`,
             });
           }
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
         }
-      };
+        else if (data.status === 'no_face_detected') {
+          setFaceCount(0);
+          setMultipleUsers([]);
+          setMessage({
+            type: 'error',
+            text: 'No face detected in the image',
+          });
+        }
+        else if (data.status === 'no_matching_users') {
+          setMultipleUsers([]);
+          setFaceCount(0);
+          setMessage({
+            type: 'error',
+            text: 'No matching users found',
+          });
+        }
+        else if (data.status === 'error') {
+          setMessage({
+            type: 'error',
+            text: data.message || 'An error occurred',
+          });
+        }
+        else if (data.status === 'success') {
+          setMessage({
+            type: 'success',
+            text: data.message || 'Operation successful',
+          });
+        }
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
+        setMessage({
+          type: 'error',
+          text: 'Error processing server response',
+        });
+      }
+    };
 
-      // Request initial data
+    ws.onmessage = handleWebSocketMessage;
+
+    // Request initial data when connection is established
+    if (isConnected) {
       sendMessage({ type: 'get_attendance' });
       sendMessage({ type: 'get_users' });
     }
-  }, [ws, sendMessage]);
+
+    return () => {
+      ws.onmessage = null;
+    };
+  }, [ws, isConnected, sendMessage]);
+
+  // Remove the duplicate WebSocket message handler
+  useEffect(() => {
+    if (!ws || !isConnected) return;
+
+    // Request initial data when connection is established
+    sendMessage({ type: 'get_attendance' });
+    sendMessage({ type: 'get_users' });
+  }, [ws, isConnected, sendMessage]);
 
   // Update streaming functions to use shared WebSocket
   const startStreaming = useCallback(() => {
@@ -403,6 +533,68 @@ export default function Attendance() {
     setSelectedCamera(event.target.value);
   };
 
+  const handleEarlyExitReason = async () => {
+    if (!earlyExitDialog.user?.attendance_id) {
+      setMessage({
+        type: 'error',
+        text: 'Invalid attendance record',
+      });
+      return;
+    }
+
+    try {
+      // Create form data
+      const formData = new FormData();
+      formData.append('attendance_id', earlyExitDialog.user.attendance_id.toString());
+      formData.append('reason', earlyExitDialog.reason);
+
+      // Log the form data contents for debugging
+      console.log('FormData contents:');
+      for (let [key, value] of formData.entries()) {
+        console.log(key, value);
+      }
+
+      // Send the early exit reason to the backend
+      const response = await api.post('/early-exit-reason', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      if (response.status === 200) {
+        // Close the dialog and reset the form
+        setEarlyExitDialog({
+          open: false,
+          user: null,
+          reason: '',
+        });
+
+        // Show success message
+        setMessage({
+          type: 'success',
+          text: 'Early exit reason submitted successfully',
+        });
+
+        // Refresh the early exit reasons list
+        sendMessage({ type: 'get_early_exit_reasons' });
+      }
+    } catch (error: any) {
+      console.error('Failed to submit early exit reason:', error);
+      console.error('Error response:', error.response?.data);
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || 'Failed to submit early exit reason',
+      });
+    }
+  };
+
+  // Add effect to fetch early exit reasons
+  useEffect(() => {
+    if (isConnected) {
+      sendMessage({ type: 'get_early_exit_reasons' });
+    }
+  }, [isConnected, sendMessage]);
+
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
       <Typography variant="h4" gutterBottom>
@@ -543,6 +735,7 @@ export default function Attendance() {
             </Alert>
           )}
 
+          {/* Face Detection Results */}
           {multipleUsers.length > 0 && (
             <Card variant="outlined" sx={{ mt: 2 }}>
               <CardContent>
@@ -566,10 +759,12 @@ export default function Attendance() {
                                   {format(new Date(user.timestamp), 'PPpp')}
                                 </Typography>
                               )}
-                              <Typography component="span" variant="body2" color="text.secondary">
-                                {' • Confidence: '}
-                                {(user.similarity * 100).toFixed(1)}%
-                              </Typography>
+                              {user.similarity !== undefined && (
+                                <Typography component="span" variant="body2" color="text.secondary">
+                                  {' • Confidence: '}
+                                  {(user.similarity * 100).toFixed(1)}%
+                                </Typography>
+                              )}
                             </>
                           }
                         />
@@ -598,12 +793,42 @@ export default function Attendance() {
                           secondary={
                             <>
                               <Typography component="span" variant="body2" color="text.primary">
-                                Marked {attendance.entry_type}
+                                {attendance.entry_type === 'entry' ? 'Entry' : 'Exit'} Recorded
                               </Typography>
                               <Typography component="span" variant="body2" color="text.secondary">
                                 {' at '}
                                 {format(new Date(attendance.timestamp), 'PPpp')}
                               </Typography>
+                              {attendance.entry_time && (
+                                <Typography component="span" variant="body2" color="text.secondary">
+                                  {' • Entry: '}
+                                  {format(new Date(attendance.entry_time), 'HH:mm')}
+                                </Typography>
+                              )}
+                              {attendance.exit_time && (
+                                <Typography component="span" variant="body2" color="text.secondary">
+                                  {' • Exit: '}
+                                  {format(new Date(attendance.exit_time), 'HH:mm')}
+                                </Typography>
+                              )}
+                              {attendance.similarity && (
+                                <Typography component="span" variant="body2" color="text.secondary">
+                                  {' • Confidence: '}
+                                  {(attendance.similarity * 100).toFixed(1)}%
+                                </Typography>
+                              )}
+                              {attendance.is_late && attendance.late_message && (
+                                <Typography component="span" variant="body2" color="error">
+                                  {' • '}
+                                  {attendance.late_message}
+                                </Typography>
+                              )}
+                              {attendance.is_early_exit && attendance.early_exit_message && (
+                                <Typography component="span" variant="body2" color="error">
+                                  {' • '}
+                                  {attendance.early_exit_message}
+                                </Typography>
+                              )}
                             </>
                           }
                         />
@@ -625,8 +850,79 @@ export default function Attendance() {
               )}
             </Alert>
           )}
+
+          {/* Early Exit Reasons Section */}
+          {earlyExitReasons.length > 0 && (
+            <Card variant="outlined" sx={{ mt: 2 }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Early Exit Reasons
+                </Typography>
+                <List>
+                  {earlyExitReasons.map((reason, index) => (
+                    <div key={`${reason.user_id}-${reason.timestamp}-${index}`}>
+                      <ListItem>
+                        <ListItemText
+                          primary={`${reason.name} (${reason.user_id})`}
+                          secondary={
+                            <>
+                              <Typography component="span" variant="body2" color="text.primary">
+                                {reason.early_exit_message}
+                              </Typography>
+                              <Typography component="span" variant="body2" color="text.secondary">
+                                {' at '}
+                                {format(new Date(reason.timestamp), 'PPpp')}
+                              </Typography>
+                            </>
+                          }
+                        />
+                      </ListItem>
+                      {index < earlyExitReasons.length - 1 && <Divider />}
+                    </div>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
+          )}
         </CardContent>
       </Card>
+
+      {/* Early Exit Dialog */}
+      <Dialog
+        open={earlyExitDialog.open}
+        onClose={() => setEarlyExitDialog({ ...earlyExitDialog, open: false })}
+      >
+        <DialogTitle>Early Exit Reason</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" gutterBottom>
+            Hey {earlyExitDialog.user?.name}, why are you leaving early?
+          </Typography>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Reason"
+            fullWidth
+            multiline
+            rows={4}
+            value={earlyExitDialog.reason}
+            onChange={(e) => setEarlyExitDialog({ ...earlyExitDialog, reason: e.target.value })}
+            placeholder="Please provide a reason for leaving early..."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEarlyExitDialog({ ...earlyExitDialog, open: false })}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleEarlyExitReason} 
+            variant="contained" 
+            color="primary"
+            disabled={!earlyExitDialog.reason.trim()}
+          >
+            Submit
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 } 

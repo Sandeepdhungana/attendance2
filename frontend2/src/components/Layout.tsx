@@ -14,6 +14,7 @@ import {
   Toolbar,
   Typography,
   useTheme,
+  Divider,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -22,6 +23,8 @@ import {
   Group as GroupIcon,
   Settings as SettingsIcon,
   Logout as LogoutIcon,
+  AccessTime as AccessTimeIcon,
+  ExitToApp as ExitToAppIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -36,6 +39,11 @@ const menuItems = [
   { text: 'Mark Attendance', icon: <GroupIcon />, path: '/attendance' },
   // { text: 'Users', icon: <PeopleIcon />, path: '/users' },
   // { text: 'Debug', icon: <BugReportIcon />, path: '/debug' },
+];
+
+const adminItems = [
+  { text: 'Office Timings', icon: <AccessTimeIcon />, path: '/office-timings' },
+  { text: 'Early Exit Reasons', icon: <ExitToAppIcon />, path: '/early-exit-reasons' },
 ];
 
 export default function Layout({ children }: LayoutProps) {
@@ -75,6 +83,23 @@ export default function Layout({ children }: LayoutProps) {
         <Box sx={{ overflow: 'auto' }}>
           <List>
             {menuItems.map((item) => (
+              <ListItem
+                button
+                key={item.text}
+                onClick={() => navigate(item.path)}
+                selected={location.pathname === item.path}
+              >
+                <ListItemIcon>{item.icon}</ListItemIcon>
+                <ListItemText primary={item.text} />
+              </ListItem>
+            ))}
+          </List>
+          <Divider />
+          <List>
+            <ListItem>
+              <ListItemText primary="Admin" />
+            </ListItem>
+            {adminItems.map((item) => (
               <ListItem
                 button
                 key={item.text}

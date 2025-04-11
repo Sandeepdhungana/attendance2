@@ -256,10 +256,7 @@ async def process_websocket_responses():
 
                     # Add attendance updates to the queue for broadcasting
                     if attendance_updates:
-                        processing_results_queue.put({
-                            "type": "attendance_update",
-                            "data": attendance_updates
-                        })
+                        await broadcast_attendance_update(attendance_updates)
 
                 # Mark the task as done
                 websocket_responses_queue.task_done()
@@ -314,7 +311,7 @@ async def broadcast_attendance_update(attendance_data):
         if client_id in active_connections:
             del active_connections[client_id]
             logger.info(
-                f"Removed disconnected client {client_id}. Remaining connections: {len(active_connections)}")
+                f"Removed disconnected client {client_id}. Total connections: {len(active_connections)}")
 
 
 def get_local_time():
@@ -330,18 +327,7 @@ def get_local_date():
 
 
 def process_image_in_process(image_data: str, entry_type: str, client_id: str):
-    """
-    Process image in a separate process
-
-    Args:
-        image_data: Base64 encoded image data
-        entry_type: Type of entry (entry or exit)
-        client_id: ID of the client making the request
-
-    Returns:
-        Tuple of (processed_users, attendance_updates, last_recognized_users, no_face_count)
-    """
-    # Create a new database session for this process
+    """Process image in a separate process"""
     db = next(get_db())
     try:
         # Remove data URL prefix if present
@@ -373,6 +359,10 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
         if not matches:
             return [], [], {}, 0
 
+        # Get office timings
+        office_timing = db.query(models.OfficeTiming).first()
+        current_time = get_local_time()
+
         # Process each matched user
         processed_users = []
         attendance_updates = []
@@ -381,86 +371,173 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
         for match in matches:
             user = match['user']
             similarity = match['similarity']
-            bbox = match['bbox']
 
             # Update last recognized users
             last_recognized_users[user.user_id] = {
                 'user': user,
-                'similarity': similarity,
-                'bbox': bbox
+                'similarity': similarity
             }
 
             # Check if attendance already marked for today
             today = get_local_date()
+            today_start = datetime.combine(today, datetime.min.time())
+            today_start = local_tz.localize(today_start)
+            
             existing_attendance = db.query(models.Attendance).filter(
                 models.Attendance.user_id == user.user_id,
-                models.Attendance.timestamp >= today
+                models.Attendance.timestamp >= today_start
             ).first()
 
             if entry_type == "entry":
                 if existing_attendance:
-                    processed_users.append({
-                        "message": "Attendance already marked for today",
-                        "user_id": user.user_id,
-                        "name": user.name,
-                        "timestamp": existing_attendance.timestamp.isoformat(),
-                        "similarity": similarity
-                    })
+                    # Check if there's already an entry without exit
+                    if not existing_attendance.exit_time:
+                        processed_users.append({
+                            "message": "Entry already marked for today",
+                            "user_id": user.user_id,
+                            "name": user.name,
+                            "timestamp": existing_attendance.timestamp.isoformat(),
+                            "similarity": similarity,
+                            "entry_time": existing_attendance.timestamp.isoformat(),
+                            "exit_time": None
+                        })
+                    else:
+                        # If there's an exit time, don't allow re-entry on same day
+                        processed_users.append({
+                            "message": "Cannot mark entry again for today after exit",
+                            "user_id": user.user_id,
+                            "name": user.name,
+                            "timestamp": existing_attendance.timestamp.isoformat(),
+                            "similarity": similarity,
+                            "entry_time": existing_attendance.timestamp.isoformat(),
+                            "exit_time": existing_attendance.exit_time.isoformat()
+                        })
+                    continue  # Skip to next user without creating new entry
+
+                # New entry logic for users without existing attendance
+                is_late = False
+                late_message = None
+                if office_timing and office_timing.login_time:
+                    # Convert login_time to timezone-aware datetime for today
+                    login_time = datetime.combine(today, office_timing.login_time.time())
+                    login_time = local_tz.localize(login_time)
+                    
+                    # Calculate the grace period end time (1 hour after login time)
+                    grace_period_end = login_time + timedelta(hours=1)
+                    
+                    # Mark as late if entry is after grace period
+                    if current_time > grace_period_end:
+                        is_late = True
+                        time_diff = current_time - login_time
+                        minutes_late = int(time_diff.total_seconds() / 60)
+                        late_message = f"Late arrival: {current_time.strftime('%H:%M')} ({minutes_late} minutes late, Office time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
+
+                new_attendance = models.Attendance(
+                    user_id=user.user_id,
+                    confidence=similarity,
+                    is_late=is_late,
+                    timestamp=current_time  # Ensure timezone-aware timestamp
+                )
+                db.add(new_attendance)
+                db.commit()
+
+                # Create message for on-time arrival
+                message = "Entry marked successfully"
+                if is_late:
+                    message += f" - {late_message}"
                 else:
-                    # Mark attendance
-                    new_attendance = models.Attendance(
-                        user_id=user.user_id,
-                        confidence=similarity
-                    )
-                    db.add(new_attendance)
-                    db.commit()
+                    message += f" - On time (Office time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
 
-                    # Create attendance update for broadcasting
-                    attendance_update = {
-                        "action": "entry",
-                        "user_id": user.user_id,
-                        "name": user.name,
-                        "timestamp": new_attendance.timestamp.isoformat(),
-                        "similarity": similarity
-                    }
-                    attendance_updates.append(attendance_update)
+                attendance_update = {
+                    "action": "entry",
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "timestamp": new_attendance.timestamp.isoformat(),
+                    "similarity": similarity,
+                    "is_late": is_late,
+                    "late_message": late_message,
+                    "entry_time": new_attendance.timestamp.isoformat(),
+                    "exit_time": None,
+                    "minutes_late": minutes_late if is_late else None
+                }
+                attendance_updates.append(attendance_update)
 
-                    processed_users.append({
-                        "message": "Attendance marked successfully",
-                        "user_id": user.user_id,
-                        "name": user.name,
-                        "timestamp": new_attendance.timestamp.isoformat(),
-                        "similarity": similarity
-                    })
+                processed_users.append({
+                    "message": message,
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "timestamp": new_attendance.timestamp.isoformat(),
+                    "similarity": similarity,
+                    "is_late": is_late,
+                    "late_message": late_message,
+                    "entry_time": new_attendance.timestamp.isoformat(),
+                    "exit_time": None,
+                    "minutes_late": minutes_late if is_late else None
+                })
+
             else:  # exit
                 if not existing_attendance:
                     processed_users.append({
-                        "message": "No attendance record found for today",
+                        "message": "No entry record found for today",
                         "user_id": user.user_id,
                         "name": user.name,
                         "similarity": similarity
                     })
-                else:
-                    # Delete the attendance record
-                    db.delete(existing_attendance)
-                    db.commit()
-
-                    # Create attendance update for broadcasting
-                    attendance_update = {
-                        "action": "exit",
-                        "user_id": user.user_id,
-                        "name": user.name,
-                        "timestamp": get_local_time().isoformat(),
-                        "similarity": similarity
-                    }
-                    attendance_updates.append(attendance_update)
-
+                    continue  # Skip to next user
+                elif existing_attendance.exit_time:
                     processed_users.append({
-                        "message": "Attendance exit recorded successfully",
+                        "message": "Exit already marked for today",
                         "user_id": user.user_id,
                         "name": user.name,
-                        "similarity": similarity
+                        "timestamp": existing_attendance.exit_time.isoformat(),
+                        "similarity": similarity,
+                        "entry_time": existing_attendance.timestamp.isoformat(),
+                        "exit_time": existing_attendance.exit_time.isoformat()
                     })
+                    continue  # Skip to next user
+
+                # Process exit for users with existing entry but no exit
+                is_early_exit = False
+                early_exit_message = None
+                if office_timing and office_timing.logout_time:
+                    # Convert logout_time to timezone-aware datetime for today
+                    logout_time = datetime.combine(today, office_timing.logout_time.time())
+                    logout_time = local_tz.localize(logout_time)
+                    
+                    if current_time < logout_time:
+                        is_early_exit = True
+                        early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Office time: {logout_time.strftime('%H:%M')})"
+
+                # Update the existing attendance record with exit time
+                existing_attendance.exit_time = current_time
+                existing_attendance.is_early_exit = is_early_exit
+                db.commit()
+
+                attendance_update = {
+                    "action": "exit",
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "timestamp": current_time.isoformat(),
+                    "similarity": similarity,
+                    "is_early_exit": is_early_exit,
+                    "early_exit_message": early_exit_message,
+                    "attendance_id": existing_attendance.id,
+                    "entry_time": existing_attendance.timestamp.isoformat(),
+                    "exit_time": current_time.isoformat()
+                }
+                attendance_updates.append(attendance_update)
+
+                processed_users.append({
+                    "message": "Exit recorded successfully" + (f" - {early_exit_message}" if early_exit_message else ""),
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "similarity": similarity,
+                    "is_early_exit": is_early_exit,
+                    "early_exit_message": early_exit_message,
+                    "attendance_id": existing_attendance.id,
+                    "entry_time": existing_attendance.timestamp.isoformat(),
+                    "exit_time": current_time.isoformat()
+                })
 
         return processed_users, attendance_updates, last_recognized_users, 0
 
@@ -468,7 +545,6 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
         logger.error(f"Error processing image in process: {str(e)}")
         return [], [], {}, 0
     finally:
-        # Always close the database session
         db.close()
 
 
@@ -557,7 +633,8 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                         "id": record.id,
                         "user_id": record.user_id,
                         "timestamp": record.timestamp.isoformat(),
-                        "confidence": record.confidence
+                        "confidence": record.confidence,
+                        "is_late": record.is_late
                     } for record in attendance_records]
                 })
 
@@ -847,8 +924,14 @@ def get_attendance(db: Session = Depends(get_db)):
         {
             "id": att.id,
             "user_id": att.user_id,
-            "timestamp": att.timestamp.isoformat(),
-            "confidence": att.confidence
+            "name": att.user.name if att.user else "Unknown",
+            "entry_time": att.timestamp.isoformat(),
+            "exit_time": att.exit_time.isoformat() if att.exit_time else None,
+            "confidence": att.confidence,
+            "is_late": att.is_late,
+            "is_early_exit": att.is_early_exit,
+            "late_message": f"Late arrival: {att.timestamp.strftime('%H:%M')}" if att.is_late else None,
+            "early_exit_message": f"Early exit: {att.exit_time.strftime('%H:%M')}" if att.is_early_exit else None
         }
         for att in attendances
     ]
@@ -946,6 +1029,10 @@ async def mark_attendance(
             detail="No matching users found in the image"
         )
 
+    # Get office timings
+    office_timing = db.query(models.OfficeTiming).first()
+    current_time = get_local_time()
+
     # Process each matched user
     processed_users = []
     attendance_updates = []  # Track attendance updates to broadcast
@@ -956,75 +1043,121 @@ async def mark_attendance(
 
         # Check if attendance already marked for today
         today = get_local_date()
+        today_start = datetime.combine(today, datetime.min.time())
+        today_start = local_tz.localize(today_start)
+        
         existing_attendance = db.query(models.Attendance).filter(
             models.Attendance.user_id == user.user_id,
-            models.Attendance.timestamp >= today
+            models.Attendance.timestamp >= today_start
         ).first()
 
         if entry_type == "entry":
             if existing_attendance:
-                processed_users.append({
-                    "message": "Attendance already marked for today",
-                    "user_id": user.user_id,
-                    "name": user.name,
-                    "timestamp": existing_attendance.timestamp.isoformat(),
-                    "similarity": similarity
-                })
+                # Check if there's already an entry without exit
+                if not existing_attendance.exit_time:
+                    processed_users.append({
+                        "message": "Entry already marked for today",
+                        "user_id": user.user_id,
+                        "name": user.name,
+                        "timestamp": existing_attendance.timestamp.isoformat(),
+                        "similarity": similarity,
+                        "entry_time": existing_attendance.timestamp.isoformat(),
+                        "exit_time": None
+                    })
+                else:
+                    # If there's an exit time, don't allow re-entry on same day
+                    processed_users.append({
+                        "message": "Cannot mark entry again for today after exit",
+                        "user_id": user.user_id,
+                        "name": user.name,
+                        "timestamp": existing_attendance.timestamp.isoformat(),
+                        "similarity": similarity,
+                        "entry_time": existing_attendance.timestamp.isoformat(),
+                        "exit_time": existing_attendance.exit_time.isoformat()
+                    })
+                continue  # Skip to next user without creating new entry
+
+            # New entry logic for users without existing attendance
+            is_late = False
+            late_message = None
+            if office_timing and office_timing.login_time:
+                # Convert login_time to timezone-aware datetime for today
+                login_time = datetime.combine(today, office_timing.login_time.time())
+                login_time = local_tz.localize(login_time)
+                
+                # Calculate the grace period end time (1 hour after login time)
+                grace_period_end = login_time + timedelta(hours=1)
+                
+                # Mark as late if entry is after grace period
+                if current_time > grace_period_end:
+                    is_late = True
+                    time_diff = current_time - login_time
+                    minutes_late = int(time_diff.total_seconds() / 60)
+                    late_message = f"Late arrival: {current_time.strftime('%H:%M')} ({minutes_late} minutes late, Office time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
+
+            new_attendance = models.Attendance(
+                user_id=user.user_id,
+                confidence=similarity,
+                is_late=is_late,
+                timestamp=current_time  # Ensure timezone-aware timestamp
+            )
+            db.add(new_attendance)
+            db.commit()
+
+            # Create message for on-time arrival
+            message = "Entry marked successfully"
+            if is_late:
+                message += f" - {late_message}"
             else:
-                # Mark attendance
-                new_attendance = models.Attendance(
-                    user_id=user.user_id,
-                    confidence=similarity  # Use similarity directly as confidence
-                )
-                db.add(new_attendance)
-                db.commit()
+                message += f" - On time (Office time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
 
-                # Create attendance update for broadcasting
-                attendance_update = {
-                    "action": "entry",
-                    "user_id": user.user_id,
-                    "name": user.name,
-                    "timestamp": new_attendance.timestamp.isoformat(),
-                    "similarity": similarity
-                }
-                attendance_updates.append(attendance_update)
+            attendance_update = {
+                "action": "entry",
+                "user_id": user.user_id,
+                "name": user.name,
+                "timestamp": new_attendance.timestamp.isoformat(),
+                "similarity": similarity,
+                "is_late": is_late,
+                "late_message": late_message,
+                "entry_time": new_attendance.timestamp.isoformat(),
+                "exit_time": None,
+                "minutes_late": minutes_late if is_late else None
+            }
+            attendance_updates.append(attendance_update)
 
-                processed_users.append({
-                    "message": "Attendance marked successfully",
-                    "user_id": user.user_id,
-                    "name": user.name,
-                    "timestamp": new_attendance.timestamp.isoformat(),
-                    "similarity": similarity
-                })
+            processed_users.append({
+                "message": message,
+                "user_id": user.user_id,
+                "name": user.name,
+                "timestamp": new_attendance.timestamp.isoformat(),
+                "similarity": similarity,
+                "is_late": is_late,
+                "late_message": late_message,
+                "entry_time": new_attendance.timestamp.isoformat(),
+                "exit_time": None,
+                "minutes_late": minutes_late if is_late else None
+            })
+
         else:  # exit
             if not existing_attendance:
                 processed_users.append({
-                    "message": "No attendance record found for today",
+                    "message": "No entry record found for today",
                     "user_id": user.user_id,
                     "name": user.name,
                     "similarity": similarity
                 })
-            else:
-                # Delete the attendance record
-                db.delete(existing_attendance)
-                db.commit()
-
-                # Create attendance update for broadcasting
-                attendance_update = {
-                    "action": "exit",
-                    "user_id": user.user_id,
-                    "name": user.name,
-                    "timestamp": get_local_time().isoformat(),
-                    "similarity": similarity
-                }
-                attendance_updates.append(attendance_update)
-
+                continue  # Skip to next user
+            elif existing_attendance.exit_time:
                 processed_users.append({
-                    "message": "Attendance exit recorded successfully",
+                    "message": "Exit already marked for today",
                     "user_id": user.user_id,
                     "name": user.name,
-                    "similarity": similarity
+                    "timestamp": existing_attendance.exit_time.isoformat(),
+                    "similarity": similarity,
+                    "entry_time": existing_attendance.timestamp.isoformat(),
+                    "exit_time": existing_attendance.exit_time.isoformat()
                 })
+                continue  # Skip to next user
 
     # Broadcast attendance updates to all connected clients
     if attendance_updates:
@@ -1094,3 +1227,115 @@ async def debug_face_recognition(
         "multiple_users": True,
         "users": processed_users
     }
+
+@app.post("/office-timings")
+async def set_office_timings(
+    login_time: str = Form(...),
+    logout_time: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Set office timings"""
+    try:
+        # Parse times
+        login_dt = datetime.strptime(login_time, "%H:%M").time()
+        logout_dt = datetime.strptime(logout_time, "%H:%M").time()
+        
+        # Get current date
+        today = get_local_date()
+        
+        # Combine with current date
+        login_datetime = datetime.combine(today, login_dt)
+        logout_datetime = datetime.combine(today, logout_dt)
+        
+        # Check if timings already exist
+        existing_timing = db.query(models.OfficeTiming).first()
+        if existing_timing:
+            existing_timing.login_time = login_datetime
+            existing_timing.logout_time = logout_datetime
+        else:
+            new_timing = models.OfficeTiming(
+                login_time=login_datetime,
+                logout_time=logout_datetime
+            )
+            db.add(new_timing)
+        
+        db.commit()
+        return {"message": "Office timings set successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/office-timings")
+def get_office_timings(db: Session = Depends(get_db)):
+    """Get current office timings"""
+    timing = db.query(models.OfficeTiming).first()
+    if not timing:
+        return {"login_time": None, "logout_time": None}
+    
+    return {
+        "login_time": timing.login_time.strftime("%H:%M") if timing.login_time else None,
+        "logout_time": timing.logout_time.strftime("%H:%M") if timing.logout_time else None
+    }
+
+@app.post("/early-exit-reason")
+async def submit_early_exit_reason(
+    attendance_id: int = Form(...),
+    reason: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Submit reason for early exit"""
+    try:
+        logger.info(f"Received early exit reason submission - attendance_id: {attendance_id}, reason: {reason}")
+        
+        # Get attendance record
+        attendance = db.query(models.Attendance).filter(
+            models.Attendance.id == attendance_id
+        ).first()
+        
+        if not attendance:
+            logger.error(f"Attendance record not found for ID: {attendance_id}")
+            raise HTTPException(status_code=404, detail="Attendance record not found")
+        
+        # Create early exit reason
+        new_reason = models.EarlyExitReason(
+            user_id=attendance.user_id,
+            attendance_id=attendance_id,
+            reason=reason
+        )
+        db.add(new_reason)
+        db.commit()
+        
+        # Get user info for broadcasting
+        user = db.query(models.User).filter(models.User.user_id == attendance.user_id).first()
+        
+        # Broadcast the update
+        await broadcast_attendance_update([{
+            "action": "early_exit_reason",
+            "user_id": attendance.user_id,
+            "name": user.name if user else "Unknown",
+            "timestamp": get_local_time().isoformat(),
+            "reason": reason
+        }])
+        
+        logger.info(f"Early exit reason submitted successfully for user {attendance.user_id}")
+        return {"message": "Early exit reason submitted successfully"}
+    except Exception as e:
+        logger.error(f"Error submitting early exit reason: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/early-exit-reasons")
+def get_early_exit_reasons(db: Session = Depends(get_db)):
+    """Get all early exit reasons"""
+    reasons = db.query(models.EarlyExitReason).order_by(
+        models.EarlyExitReason.timestamp.desc()
+    ).all()
+    return [
+        {
+            "id": reason.id,
+            "user_id": reason.user_id,
+            "user_name": reason.user.name,
+            "attendance_id": reason.attendance_id,
+            "reason": reason.reason,
+            "timestamp": reason.timestamp.isoformat()
+        }
+        for reason in reasons
+    ]

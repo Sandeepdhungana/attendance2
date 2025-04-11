@@ -7,6 +7,8 @@ import Attendance from './pages/Attendance';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Debug from './pages/Debug';
+import OfficeTimings from './pages/OfficeTimings';
+import EarlyExitReasons from './pages/EarlyExitReasons';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 // Create WebSocket context
@@ -135,6 +137,8 @@ function App() {
             <Route path="/attendance" element={<Attendance />} />
             <Route path="/users" element={<Users />} />
             <Route path="/debug" element={<Debug />} />
+            <Route path="/office-timings" element={<OfficeTimings />} />
+            <Route path="/early-exit-reasons" element={<EarlyExitReasons />} />
           </Routes>
         </Layout>
       </WebSocketProvider>

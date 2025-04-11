@@ -24,8 +24,14 @@ import { useWebSocket } from '../App';
 interface AttendanceRecord {
   id: number;
   user_id: string;
-  timestamp: string;
+  name: string;
+  entry_time: string;
+  exit_time: string;
   confidence: number;
+  is_late?: boolean;
+  is_early_exit?: boolean;
+  late_message?: string;
+  early_exit_message?: string;
 }
 
 interface User {
@@ -63,7 +69,8 @@ function TabPanel(props: TabPanelProps) {
 export default function Dashboard() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tabValue, setTabValue] = useState(0);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -82,10 +89,26 @@ export default function Dashboard() {
       width: 150,
     },
     {
-      field: 'timestamp',
-      headerName: 'Time',
+      field: 'name',
+      headerName: 'Name',
+      width: 200,
+    },
+    {
+      field: 'entry_time',
+      headerName: 'Entry Time',
       width: 200,
       valueFormatter: (params) => {
+        if (!params.value) return 'Not recorded';
+        const date = new Date(params.value);
+        return format(date, 'PPpp');
+      },
+    },
+    {
+      field: 'exit_time',
+      headerName: 'Exit Time',
+      width: 200,
+      valueFormatter: (params) => {
+        if (!params.value) return 'Not recorded';
         const date = new Date(params.value);
         return format(date, 'PPpp');
       },
@@ -95,6 +118,17 @@ export default function Dashboard() {
       headerName: 'Confidence',
       width: 130,
       valueFormatter: (params) => `${(params.value * 100).toFixed(1)}%`,
+    },
+    {
+      field: 'status',
+      headerName: 'Status',
+      width: 200,
+      valueGetter: (params) => {
+        const row = params.row;
+        if (row.is_late && row.late_message) return row.late_message;
+        if (row.is_early_exit && row.early_exit_message) return row.early_exit_message;
+        return 'On time';
+      },
     },
     {
       field: 'actions',
@@ -151,27 +185,39 @@ export default function Dashboard() {
 
   const fetchRecords = async () => {
     try {
+      setRecordsLoading(true);
       const response = await api.get('/attendance');
-      // Validate and filter out invalid records
-      const validRecords = response.data.filter((record: any) => 
-        record && typeof record.id === 'number' && 
-        typeof record.user_id === 'string' && 
-        typeof record.timestamp === 'string' && 
-        typeof record.confidence === 'number'
-      );
+      console.log('Attendance API Response:', response.data);
+      
+      const validRecords = response.data.filter((record: any) => {
+        const isValid = record && 
+          typeof record.id === 'number' && 
+          typeof record.user_id === 'string' && 
+          typeof record.name === 'string' && 
+          record.entry_time && 
+          typeof record.confidence === 'number';
+        
+        if (!isValid) {
+          console.warn('Invalid record:', record);
+        }
+        return isValid;
+      });
+      
+      console.log('Valid records:', validRecords);
       setRecords(validRecords);
       setError(null);
     } catch (err) {
+      console.error('Error fetching attendance records:', err);
       setError('Failed to fetch attendance records');
     } finally {
-      setLoading(false);
+      setRecordsLoading(false);
     }
   };
 
   const fetchUsers = async () => {
     try {
+      setUsersLoading(true);
       const response = await api.get('/users');
-      // Validate and filter out invalid users
       const validUsers = response.data.filter((user: any) => 
         user && typeof user.user_id === 'string' && 
         typeof user.name === 'string' && 
@@ -181,6 +227,8 @@ export default function Dashboard() {
       setError(null);
     } catch (err) {
       setError('Failed to fetch users');
+    } finally {
+      setUsersLoading(false);
     }
   };
 
@@ -241,21 +289,33 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // Initial data fetch
     fetchRecords();
     fetchUsers();
+  }, []); // Empty dependency array for initial fetch
 
-    if (ws) {
-      ws.onmessage = (event) => {
-        try {
-          // When we receive a message, it means a new attendance record was added
-          // Fetch the updated records
+  // Separate WebSocket listener setup
+  useEffect(() => {
+    if (!ws) return;
+
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'attendance_update') {
           fetchRecords();
-        } catch (error) {
-          console.error('Error processing attendance update:', error);
         }
-      };
-    }
-  }, [ws]);
+      } catch (error) {
+        console.error('Error processing attendance update:', error);
+      }
+    };
+
+    ws.addEventListener('message', handleMessage);
+
+    // Cleanup function to remove the event listener
+    return () => {
+      ws.removeEventListener('message', handleMessage);
+    };
+  }, [ws]); // Only re-run when WebSocket instance changes
 
   return (
     <Box sx={{ height: '100%', width: '100%' }}>
@@ -273,7 +333,7 @@ export default function Dashboard() {
           </Box>
 
           <TabPanel value={tabValue} index={0}>
-            {loading ? (
+            {recordsLoading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
                 <CircularProgress />
               </Box>
@@ -302,7 +362,7 @@ export default function Dashboard() {
           </TabPanel>
 
           <TabPanel value={tabValue} index={1}>
-            {loading ? (
+            {usersLoading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
                 <CircularProgress />
               </Box>
@@ -367,7 +427,7 @@ export default function Dashboard() {
         <DialogTitle>Delete Attendance Record</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Are you sure you want to delete this attendance record for user {attendanceToDelete?.user_id} from {attendanceToDelete ? format(new Date(attendanceToDelete.timestamp), 'PPpp') : ''}? This action cannot be undone.
+            Are you sure you want to delete this attendance record for user {attendanceToDelete?.user_id} from {attendanceToDelete ? format(new Date(attendanceToDelete.entry_time), 'PPpp') : ''}? This action cannot be undone.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
