@@ -64,9 +64,14 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
                     "data": [{
                         "id": record.id,
                         "user_id": record.user_id,
-                        "timestamp": record.timestamp.isoformat(),
+                        "name": record.user.name if record.user else "Unknown User",
+                        "entry_time": record.timestamp.isoformat() if record.timestamp else None,
+                        "exit_time": record.exit_time.isoformat() if record.exit_time else None,
                         "confidence": record.confidence,
-                        "is_late": record.is_late
+                        "is_late": record.is_late,
+                        "is_early_exit": record.is_early_exit,
+                        "late_message": f"Late arrival: {record.timestamp.strftime('%H:%M')}" if record.is_late else None,
+                        "early_exit_message": f"Early exit: {record.exit_time.strftime('%H:%M')}" if record.is_early_exit else None
                     } for record in attendance_records]
                 })
 
