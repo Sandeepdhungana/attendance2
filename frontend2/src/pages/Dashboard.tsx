@@ -43,9 +43,9 @@ export default function Dashboard() {
 
   const attendanceColumns: GridColDef[] = [
     { field: 'id', headerName: 'ID', width: 120 },
-    { field: 'name', headerName: 'Name', width: 120 },
-    { field: 'entry_time', headerName: 'Entry Time', width: 120 },
-    { field: 'exit_time', headerName: 'Exit Time', width: 120 },
+    { field: 'name', headerName: 'Name', width: 120, },
+    { field: 'entry_time', headerName: 'Entry Time', width: 120, valueFormatter: (params) => format(new Date(params.value), 'PPpp'), },
+    { field: 'exit_time', headerName: 'Exit Time', width: 120, valueFormatter: (params) => format(new Date(params.value), 'PPpp'), },
     { field: 'confidence', headerName: 'Confidence', width: 100 },
     { 
       field: 'is_late', 
