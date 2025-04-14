@@ -75,7 +75,7 @@ def get_early_exit_reasons(db: Session = Depends(get_db)):
         {
             "id": reason.id,
             "user_id": reason.user_id,
-            "user_name": reason.user.name,
+            "user_name": reason.user.name if reason.user else "Unknown User",
             "attendance_id": reason.attendance_id,
             "reason": reason.reason,
             "timestamp": reason.timestamp.isoformat()

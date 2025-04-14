@@ -165,12 +165,18 @@ def process_attendance_for_user(user: User, similarity: float, entry_type: str, 
             "early_exit_message": early_exit_message,
             "attendance_id": existing_attendance.id,
             "entry_time": existing_attendance.timestamp.isoformat(),
-            "exit_time": current_time.isoformat()
+            "exit_time": current_time.isoformat(),
+            "show_early_exit_dialog": is_early_exit,
+            "user_name": user.name,
+            "reason": ""
         }
 
         result["processed_user"] = {
             **attendance_data,
-            "message": "Exit recorded successfully" + (f" - {early_exit_message}" if early_exit_message else "")
+            "message": "Exit recorded successfully" + (f" - {early_exit_message}" if early_exit_message else ""),
+            "show_early_exit_dialog": is_early_exit,
+            "user_name": user.name,
+            "reason": ""
         }
         result["attendance_update"] = attendance_data
 
