@@ -20,7 +20,7 @@ A modern face recognition-based attendance system using InsightFace for accurate
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10
 - Node.js 14.x or higher
 - npm or yarn
 
@@ -110,23 +110,3 @@ The frontend will be available at `http://localhost:3000`
 - Material-UI - React UI framework
 - Axios - HTTP client
 
-## 🔒 Security Considerations
-
-- Configure CORS with specific origins in production
-- Implement JWT-based authentication
-- Secure storage of face embeddings
-- Use environment variables for sensitive configuration
-- Regular security audits
-- Data encryption at rest
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 📞 Support
-
-For support, please open an issue in the GitHub repository.
