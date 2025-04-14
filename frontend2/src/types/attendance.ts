@@ -37,9 +37,11 @@ export interface AttendanceUpdate {
 export interface EarlyExitReason {
   id: number;
   user_id: string;
-  name: string;
+  user_name: string;
+  attendance_id: number;
+  reason: string;
   timestamp: string;
-  early_exit_message: string;
+  name?: string;
 }
 
 export interface MessageState {

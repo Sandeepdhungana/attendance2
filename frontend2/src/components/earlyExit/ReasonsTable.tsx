@@ -1,27 +1,41 @@
 import React from 'react';
 import {
-  TableContainer,
   Table,
-  TableHead,
   TableBody,
-  TableRow,
   TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Paper,
   IconButton,
-  Tooltip,
+  Typography,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { EarlyExitReason } from '../../types/earlyExit';
+import { EarlyExitReason } from '../../types/attendance';
+import { format } from 'date-fns';
 
 interface ReasonsTableProps {
   reasons: EarlyExitReason[];
-  onDelete: (reason: EarlyExitReason) => void;
+  onDelete: (reasonId: number) => void;
 }
 
-export const ReasonsTable: React.FC<ReasonsTableProps> = ({
-  reasons,
-  onDelete,
-}) => {
+export const ReasonsTable: React.FC<ReasonsTableProps> = ({ reasons, onDelete }) => {
+  if (!Array.isArray(reasons)) {
+    return (
+      <Typography variant="body1" color="error" align="center">
+        Invalid data format
+      </Typography>
+    );
+  }
+
+  if (reasons.length === 0) {
+    return (
+      <Typography variant="body1" color="textSecondary" align="center">
+        No early exit reasons found
+      </Typography>
+    );
+  }
+
   return (
     <TableContainer component={Paper}>
       <Table>
@@ -30,7 +44,7 @@ export const ReasonsTable: React.FC<ReasonsTableProps> = ({
             <TableCell>User</TableCell>
             <TableCell>Reason</TableCell>
             <TableCell>Timestamp</TableCell>
-            <TableCell>Actions</TableCell>
+            <TableCell align="right">Actions</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -39,27 +53,19 @@ export const ReasonsTable: React.FC<ReasonsTableProps> = ({
               <TableCell>{reason.user_name}</TableCell>
               <TableCell>{reason.reason}</TableCell>
               <TableCell>
-                {new Date(reason.timestamp).toLocaleString()}
+                {format(new Date(reason.timestamp), 'MMM dd, yyyy hh:mm a')}
               </TableCell>
-              <TableCell>
-                <Tooltip title="Delete reason">
-                  <IconButton
-                    color="error"
-                    onClick={() => onDelete(reason)}
-                  >
-                    <DeleteIcon />
-                  </IconButton>
-                </Tooltip>
+              <TableCell align="right">
+                <IconButton
+                  onClick={() => onDelete(reason.id)}
+                  color="error"
+                  size="small"
+                >
+                  <DeleteIcon />
+                </IconButton>
               </TableCell>
             </TableRow>
           ))}
-          {reasons.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={4} align="center">
-                No early exit reasons found
-              </TableCell>
-            </TableRow>
-          )}
         </TableBody>
       </Table>
     </TableContainer>

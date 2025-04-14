@@ -51,9 +51,8 @@ export default function Attendance() {
 
   const {
     handleEarlyExitReason,
-    handleDeleteEarlyExitReason,
-    handleDeleteEarlyExitConfirm,
-  } = useEarlyExit(sendMessage);
+    handleEarlyExitDialogChange,
+  } = useEarlyExit();
 
   const handleEntryTypeChange = (
     event: React.MouseEvent<HTMLElement>,
@@ -104,18 +103,6 @@ export default function Attendance() {
     startVideoStream(videoRef);
   }, [startVideoStream, videoRef]);
 
-  const handleEarlyExitDialogChange = (value: string) => {
-    if (earlyExitDialog.reason) {
-      setEarlyExitDialog({
-        open: true,
-        reason: {
-          ...earlyExitDialog.reason,
-          early_exit_message: value,
-        },
-      });
-    }
-  };
-
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
       <Typography variant="h4" gutterBottom>
@@ -155,10 +142,6 @@ export default function Attendance() {
 
           <DetectedUsers users={multipleUsers} />
           <AttendanceList recentAttendance={recentAttendance} />
-          <EarlyExitList
-            earlyExitReasons={earlyExitReasons}
-            onDelete={handleDeleteEarlyExitReason}
-          />
         </CardContent>
       </Card>
 
@@ -167,8 +150,6 @@ export default function Attendance() {
         reason={earlyExitDialog.reason}
         onClose={() => setEarlyExitDialog({ open: false, reason: null })}
         onSubmit={handleEarlyExitReason}
-        onDelete={handleDeleteEarlyExitConfirm}
-        onChange={handleEarlyExitDialogChange}
       />
     </Box>
   );

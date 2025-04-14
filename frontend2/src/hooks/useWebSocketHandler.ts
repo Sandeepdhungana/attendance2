@@ -53,9 +53,11 @@ export const useWebSocketHandler = () => {
                 reason: {
                   id: Number(update.attendance_id) || 0,
                   user_id: update.user_id,
+                  user_name: update.name,
+                  attendance_id: Number(update.attendance_id) || 0,
                   name: update.name,
                   timestamp: update.timestamp,
-                  early_exit_message: update.early_exit_message || ''
+                  reason: update.reason || ''
                 },
               });
             }
@@ -64,9 +66,11 @@ export const useWebSocketHandler = () => {
               setEarlyExitReasons(prev => [{
                 id: Number(update.attendance_id) || 0,
                 user_id: update.user_id,
+                user_name: update.name,
+                attendance_id: Number(update.attendance_id) || 0,
                 name: update.name,
                 timestamp: update.timestamp,
-                early_exit_message: update.early_exit_message || ''
+                reason: update.reason || ''
               }, ...prev]);
             }
           });

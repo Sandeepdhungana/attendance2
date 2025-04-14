@@ -648,40 +648,6 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
         logger.info(
             f"WebSocket connection {client_id} closed. Total connections: {len(active_connections)}")
 
-def client_process_handler(websocket: WebSocket, db: Session):
-    """
-    Handler for client process
-    """
-    try:
-        # Initialize process-local variables
-        last_recognized_users = {}
-        no_face_count = 0
-
-        # Process messages from the queue
-        while True:
-            try:
-                # Get message from queue
-                message = websocket_responses_queue.get(timeout=1)
-                if message.get("client_id") == websocket:
-                    # Process message
-                    if "error" in message:
-                        logger.error(f"Error in client process: {message['error']}")
-                    else:
-                        # Update process-local variables
-                        last_recognized_users = message.get("last_recognized_users", {})
-                        no_face_count = message.get("no_face_count", 0)
-            except Exception as e:
-                logger.error(f"Error in client process handler: {str(e)}")
-                break
-    except Exception as e:
-        logger.error(f"Client process error: {str(e)}")
-    finally:
-        # Clean up
-        if websocket in active_connections:
-            active_connections.remove(websocket)
-        with client_pending_tasks_lock:
-            if websocket in client_pending_tasks:
-                del client_pending_tasks[websocket]
 
 def process_attendance_for_user(user, similarity, entry_type, db):
     """Process attendance for a user with consistent duplicate checking"""

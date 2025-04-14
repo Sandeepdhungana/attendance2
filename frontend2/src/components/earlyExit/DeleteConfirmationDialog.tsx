@@ -3,14 +3,16 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogContentText,
   DialogActions,
   Button,
+  Typography,
 } from '@mui/material';
-import { DeleteDialogState } from '../../types/earlyExit';
 
 interface DeleteConfirmationDialogProps {
-  deleteDialog: DeleteDialogState;
+  deleteDialog: {
+    open: boolean;
+    reasonId: number | null;
+  };
   onClose: () => void;
   onConfirm: () => void;
 }
@@ -24,10 +26,9 @@ export const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> =
     <Dialog open={deleteDialog.open} onClose={onClose}>
       <DialogTitle>Delete Early Exit Reason</DialogTitle>
       <DialogContent>
-        <DialogContentText>
-          Are you sure you want to delete this early exit reason for{' '}
-          {deleteDialog.reason?.user_name}?
-        </DialogContentText>
+        <Typography>
+          Are you sure you want to delete this early exit reason? This action cannot be undone.
+        </Typography>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
