@@ -1050,70 +1050,6 @@ def get_office_timings(db: Session = Depends(get_db)):
         "logout_time": timing.logout_time.strftime("%H:%M") if timing.logout_time else None
     }
 
-@app.post("/early-exit-reason")
-async def submit_early_exit_reason(
-    attendance_id: int = Form(...),
-    reason: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """Submit reason for early exit"""
-    try:
-        logger.info(f"Received early exit reason submission - attendance_id: {attendance_id}, reason: {reason}")
-        
-        # Get attendance record
-        attendance = db.query(models.Attendance).filter(
-            models.Attendance.id == attendance_id
-        ).first()
-        
-        if not attendance:
-            logger.error(f"Attendance record not found for ID: {attendance_id}")
-            raise HTTPException(status_code=404, detail="Attendance record not found")
-        
-        # Create early exit reason
-        new_reason = models.EarlyExitReason(
-            user_id=attendance.user_id,
-            attendance_id=attendance_id,
-            reason=reason
-        )
-        db.add(new_reason)
-        db.commit()
-        
-        # Get user info for broadcasting
-        user = db.query(models.User).filter(models.User.user_id == attendance.user_id).first()
-        
-        # Broadcast the update
-        await broadcast_attendance_update([{
-            "action": "early_exit_reason",
-            "user_id": attendance.user_id,
-            "name": user.name if user else "Unknown",
-            "timestamp": get_local_time().isoformat(),
-            "reason": reason
-        }])
-        
-        logger.info(f"Early exit reason submitted successfully for user {attendance.user_id}")
-        return {"message": "Early exit reason submitted successfully"}
-    except Exception as e:
-        logger.error(f"Error submitting early exit reason: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/early-exit-reasons")
-def get_early_exit_reasons(db: Session = Depends(get_db)):
-    """Get all early exit reasons"""
-    reasons = db.query(models.EarlyExitReason).order_by(
-        models.EarlyExitReason.timestamp.desc()
-    ).all()
-    return [
-        {
-            "id": reason.id,
-            "user_id": reason.user_id,
-            "user_name": reason.user.name,
-            "attendance_id": reason.attendance_id,
-            "reason": reason.reason,
-            "timestamp": reason.timestamp.isoformat()
-        }
-        for reason in reasons
-    ]
-
 @app.get("/timezone")
 def get_timezone(db: Session = Depends(get_db)):
     """Get current timezone configuration"""
@@ -1237,41 +1173,20 @@ def delete_user(user_id: str, db: Session = Depends(get_db)):
     logger.info(f"User deleted successfully: {user_id}")
     return {"message": "User deleted successfully"}
 
-@app.delete("/early-exit-reasons/{reason_id}")
-def delete_early_exit_reason(reason_id: int, db: Session = Depends(get_db)):
-    """Delete an early exit reason"""
-    # Find the early exit reason
-    reason = db.query(models.EarlyExitReason).filter(
-        models.EarlyExitReason.id == reason_id).first()
-    if not reason:
-        raise HTTPException(
-            status_code=404, detail="Early exit reason not found")
-
-    # Store info before deletion for broadcasting
-    user_id = reason.user_id
-    user = db.query(models.User).filter(models.User.user_id == user_id).first()
-    user_name = user.name if user else "Unknown"
-    attendance_id = reason.attendance_id
-
-    # Delete the early exit reason
-    db.delete(reason)
-    db.commit()
-
-    # Create update for broadcasting
-    update = {
-        "action": "delete_early_exit_reason",
-        "user_id": user_id,
-        "name": user_name,
-        "attendance_id": attendance_id,
-        "reason_id": reason_id,
-        "timestamp": get_local_time().isoformat()
-    }
-
-    # Add the update to the processing results queue
-    processing_results_queue.put({
-        "type": "attendance_update",
-        "data": [update]
-    })
-
-    logger.info(f"Early exit reason deleted successfully: ID {reason_id}")
-    return {"message": "Early exit reason deleted successfully"}
+@app.get("/early-exit-reasons")
+def get_early_exit_reasons(db: Session = Depends(get_db)):
+    """Get all early exit reasons"""
+    reasons = db.query(models.EarlyExitReason).order_by(
+        models.EarlyExitReason.timestamp.desc()
+    ).all()
+    return [
+        {
+            "id": reason.id,
+            "user_id": reason.user_id,
+            "user_name": reason.user.name,
+            "attendance_id": reason.attendance_id,
+            "reason": reason.reason,
+            "timestamp": reason.timestamp.isoformat()
+        }
+        for reason in reasons
+    ]
