@@ -43,39 +43,73 @@ export default function Dashboard() {
 
   const attendanceColumns: GridColDef[] = [
     { field: 'id', headerName: 'ID', width: 70 },
-    { field: 'name', headerName: 'Name', width: 130 },
+    { 
+      field: 'name', 
+      headerName: 'Name', 
+      width: 130,
+      valueGetter: (params) => {
+        // Ensure name is always a string
+        return params.row.name || 'Unknown User';
+      }
+    },
     { 
       field: 'entry_time', 
       headerName: 'Entry Time', 
       width: 180,
+      valueGetter: (params) => {
+        // Ensure we have a valid date string
+        return params.row.entry_time || null;
+      },
       valueFormatter: (params) => {
-        if (!params.value) return 'Not recorded';
-        const date = new Date(params.value);
-        return date.toLocaleString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        });
+        if (!params.value || params.value === 'null' || params.value === 'undefined') return 'Not recorded';
+        try {
+          const date = new Date(params.value);
+          if (isNaN(date.getTime())) return 'Not recorded';
+          
+          return new Intl.DateTimeFormat('en-US', {
+            timeZone: 'UTC',
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+          }).format(date);
+        } catch (error) {
+          console.error('Error formatting date:', error);
+          return 'Not recorded';
+        }
       }
     },
     { 
       field: 'exit_time', 
       headerName: 'Exit Time', 
       width: 180,
+      valueGetter: (params) => {
+        // Ensure we have a valid date string
+        return params.row.exit_time || null;
+      },
       valueFormatter: (params) => {
-        if (!params.value) return 'Not recorded';
-        const date = new Date(params.value);
-        return date.toLocaleString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        });
+        if (!params.value || params.value === 'null' || params.value === 'undefined') return 'Not recorded';
+        try {
+          const date = new Date(params.value);
+          if (isNaN(date.getTime())) return 'Not recorded';
+          
+          return new Intl.DateTimeFormat('en-US', {
+            timeZone: 'UTC',
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+          }).format(date);
+        } catch (error) {
+          console.error('Error formatting date:', error);
+          return 'Not recorded';
+        }
       }
     },
     { field: 'confidence', headerName: 'Confidence', width: 100 },

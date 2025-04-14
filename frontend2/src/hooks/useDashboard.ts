@@ -64,16 +64,36 @@ export function useDashboard() {
         const data = JSON.parse(event.data);
         
         if (data.type === 'attendance_data') {
-          setRecords(data.data);
+          // Only update if we have new data
+          if (data.data && Array.isArray(data.data)) {
+            setRecords(data.data);
+          }
           setRecordsLoading(false);
           setError(null);
         } else if (data.type === 'user_data') {
-          setUsers(data.data);
+          // Only update if we have new data
+          if (data.data && Array.isArray(data.data)) {
+            setUsers(data.data);
+          }
           setUsersLoading(false);
           setError(null);
         } else if (data.type === 'attendance_update') {
-          // Refresh attendance records when updates occur
-          fetchData();
+          // Handle attendance update without clearing the data
+          if (data.data && Array.isArray(data.data)) {
+            // Update only the changed records
+            setRecords(prevRecords => {
+              const updatedRecords = [...prevRecords];
+              data.data.forEach((update: any) => {
+                const index = updatedRecords.findIndex(r => r.id === update.id);
+                if (index !== -1) {
+                  updatedRecords[index] = { ...updatedRecords[index], ...update };
+                } else {
+                  updatedRecords.push(update);
+                }
+              });
+              return updatedRecords;
+            });
+          }
         }
       } catch (err) {
         console.error('Error processing WebSocket message:', err);
@@ -86,7 +106,7 @@ export function useDashboard() {
     return () => {
       ws.removeEventListener('message', handleMessage);
     };
-  }, [ws, fetchData]);
+  }, [ws]);
 
   // Request data via WebSocket when connected
   useEffect(() => {
