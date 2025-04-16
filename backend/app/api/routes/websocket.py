@@ -11,12 +11,14 @@ from datetime import datetime
 from app.database import query, create, delete, update
 from app.dependencies import (
     get_process_pool,
+    get_thread_pool,
     get_pending_futures,
     get_client_tasks,
     get_queues,
     get_active_connections,
     get_face_recognition,
-    get_employee_cache
+    get_employee_cache,
+    get_cached_employees
 )
 from app.utils.websocket import (
     ping_client, 
@@ -28,6 +30,7 @@ from app.utils.websocket import (
 from app.utils.processing import process_image_in_process
 from app.utils.time_utils import get_local_time
 from app.config import IMAGES_DIR, MAX_CONCURRENT_TASKS_PER_CLIENT
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,72 +52,126 @@ async def websocket_endpoint(websocket: WebSocket):
     with client_pending_tasks_lock:
         client_pending_tasks[client_id] = 0
 
+    # Get thread pool for I/O bound tasks
+    thread_pool = get_thread_pool()
+
     try:
         while True:
             data = await websocket.receive_json()
 
             if data.get("type") == "get_attendance":
-                # Get all attendance records
-                attendance_records = query("Attendance")
-
-                await websocket.send_json({
-                    "type": "attendance_data",
-                    "data": [{
-                        "id": record["objectId"],
+                # Run database query in thread pool to avoid blocking
+                def fetch_attendance():
+                    attendance_records = query("Attendance")
+                    return [{
+                        "id": record["employee_id"],
+                        "objectId": record["objectId"],
                         "employee_id": record["employee_id"],
-                        "name": record.get("employee_name", "Unknown Employee"),
-                        "entry_time": record.get("timestamp", None),
-                        "exit_time": record.get("exit_time", None),
+                        "entry_time": record.get("timestamp", {}).get("iso") if record.get("timestamp") else None,
+                        "exit_time": record.get("exit_time", {}).get("iso") if record.get("exit_time") else None,
                         "confidence": record.get("confidence", 0),
                         "is_late": record.get("is_late", False),
                         "is_early_exit": record.get("is_early_exit", False),
-                        "late_message": f"Late arrival: {record['timestamp']}" if record.get("is_late", False) else None,
-                        "early_exit_message": f"Early exit: {record['exit_time']}" if record.get("is_early_exit", False) else None
+                        "late_message": f"Late arrival: {record.get('timestamp', {}).get('iso')}" if record.get("is_late", False) else None,
+                        "early_exit_message": f"Early exit: {record.get('exit_time', {}).get('iso')}" if record.get("is_early_exit", False) else None
                     } for record in attendance_records]
+                
+                # Run in thread pool and await completion
+                # records = await asyncio.get_event_loop().run_in_executor(thread_pool, fetch_attendance)
+                records = fetch_attendance()
+                await websocket.send_json({
+                    "type": "attendance_data",
+                    "data": records
                 })
 
             elif data.get("type") == "get_employees":
-                # Get all employees
-                employees = query("Employee")
-                await websocket.send_json({
-                    "type": "employee_data",
-                    "data": [{
+                # Run employee query in thread pool
+                def fetch_employees():
+                    # Use cached employees if available
+                    try:
+                        employees = get_cached_employees()
+                    except:
+                        employees = query("Employee")
+                        
+                    return [{
                         "employee_id": employee["employee_id"],
                         "name": employee["name"],
                         "created_at": employee.get("createdAt", "")
                     } for employee in employees]
+                
+                # Run in thread pool and await completion
+                # employees_data = await asyncio.get_event_loop().run_in_executor(thread_pool, fetch_employees)
+                employees_data = fetch_employees()
+                await websocket.send_json({
+                    "type": "employee_data",
+                    "data": employees_data
                 })
 
             elif data.get("type") == "delete_attendance":
                 # Delete attendance record
                 attendance_id = data.get("attendance_id")
+                
                 if attendance_id:
-                    # Get attendance record first to get employee information
-                    attendance_record = query("Attendance", where={"objectId": attendance_id}, limit=1)
-                    if attendance_record:
-                        attendance = attendance_record[0]
-                        # Delete attendance record
-                        delete("Attendance", attendance_id)
-                        
+                    # Define the delete operation to run in thread pool
+                    def delete_attendance_record():
+                       
+                        attendance_record = query("Attendance", where={"objectId": attendance_id}, limit=1)
+                        if attendance_record:
+                            attendance = attendance_record[0]
+                            delete("Attendance", attendance_id)
+                            
+                            return attendance
+                        return None
+                    
+                    # Run deletion in thread pool
+                    attendance = delete_attendance_record()
+                    if attendance:
                         # Broadcast attendance deletion
                         await broadcast_attendance_update({
                             "action": "delete",
                             "employee_id": attendance["employee_id"],
-                            "name": attendance.get("employee_name", "Unknown Employee"),
+                            "id": attendance["employee_id"],  # Set id for proper matching in frontend
+                            "objectId": attendance["objectId"],  # Include objectId for proper referencing
                             "timestamp": get_local_time().isoformat()
                         })
+                        
+                        # Also send response to the current client
+                        await websocket.send_json({
+                            "status": "success",
+                            "message": "Attendance record deleted successfully"
+                        })
+                    else:
+                        await websocket.send_json({
+                            "status": "error",
+                            "message": f"Attendance record with ID {attendance_id} not found"
+                        })
+                else:
+                    logger.warning("No attendance_id provided for deletion")
+                    await websocket.send_json({
+                        "status": "error",
+                        "message": "No attendance_id provided for deletion"
+                    })
 
             elif data.get("type") == "delete_employee":
-                # Delete employee
+                # Delete employee operation
                 employee_id = data.get("employee_id")
                 if employee_id:
-                    # Get employee info before deletion
-                    employee = query("Employee", where={"employee_id": employee_id}, limit=1)
+                    # Define delete employee operation for thread pool
+                    def delete_employee_record():
+                        # Get employee info before deletion
+                        employee = query("Employee", where={"employee_id": employee_id}, limit=1)
+                        if employee:
+                            employee = employee[0]
+                            # Delete the employee
+                            delete("Employee", employee["objectId"])
+                            return employee
+                        return None
+                    
+                    # Run in thread pool
+                    # employee = await asyncio.get_event_loop().run_in_executor(thread_pool, delete_employee_record)
+                    employee = delete_employee_record()
+                    
                     if employee:
-                        employee = employee[0]
-                        # Delete the employee
-                        delete("Employee", employee["objectId"])
-                        
                         # Broadcast employee deletion
                         await broadcast_attendance_update({
                             "action": "delete_employee",
@@ -122,12 +179,24 @@ async def websocket_endpoint(websocket: WebSocket):
                             "name": employee["name"],
                             "timestamp": get_local_time().isoformat()
                         })
+                        await websocket.send_json({
+                            "status": "success",
+                            "message": "Employee deleted successfully"
+                        })
+                    else:
+                        await websocket.send_json({
+                            "status": "error",
+                            "message": "Employee not found"
+                        })
 
             elif data.get("type") == "register_employee":
                 # Register new employee
                 employee_id = data.get("employee_id")
                 name = data.get("name")
                 image_data = data.get("image")
+                position = data.get("position")
+                department = data.get("department")
+                status = data.get("status")
 
                 if not all([employee_id, name, image_data]):
                     await websocket.send_json({
@@ -136,8 +205,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                     continue
 
-                # Check if employee already exists
-                existing_employee = query("Employee", where={"employee_id": employee_id}, limit=1)
+                # Check if employee already exists in thread pool
+                def check_employee():
+                    return query("Employee", where={"employee_id": employee_id}, limit=1)
+                
+                existing_employee = check_employee()
+                
                 if existing_employee:
                     await websocket.send_json({
                         "status": "error",
@@ -163,9 +236,17 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
                         continue
 
-                    # Get face embedding
+                    # Get face embedding - this is CPU intensive, so use process pool
                     face_recognition = get_face_recognition()
-                    embedding = face_recognition.get_embedding(img)
+                    process_pool = get_process_pool()
+                    
+                    def get_face_embedding():
+                        return face_recognition.get_embedding(img)
+                    
+                    # embedding = await asyncio.get_event_loop().run_in_executor(
+                    #     process_pool, get_face_embedding)
+                    embedding = get_face_embedding()
+                    
                     if embedding is None:
                         await websocket.send_json({
                             "status": "error",
@@ -173,21 +254,31 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
                         continue
 
-                    # Create new employee with embedding
-                    current_time = get_local_time().isoformat()
-                    new_employee = create("Employee", {
-                        "employee_id": employee_id,
-                        "name": name,
-                        "embedding": face_recognition.embedding_to_str(embedding),
-                        "created_at": {
-                            "__type": "Date",
-                            "iso": current_time
-                        },
-                        "updated_at": {
-                            "__type": "Date",
-                            "iso": current_time
-                        }
-                    })
+                    # Create new employee with embedding in thread pool
+                    def create_employee_record():
+                        current_time = get_local_time().isoformat()
+                        return create("Employee", {
+                            "employee_id": employee_id,
+                            "name": name,
+                            "embedding": face_recognition.embedding_to_str(embedding),
+                            "created_at": {
+                                "__type": "Date",
+                                "iso": current_time
+                            },
+                            "updated_at": {
+                                "__type": "Date",
+                                "iso": current_time
+                            },
+                            "position": position,
+                            "department": department,
+                            "status": status
+                            
+                        })
+                    
+                    # new_employee = await asyncio.get_event_loop().run_in_executor(
+                    #     thread_pool, create_employee_record)
+
+                    new_employee = create_employee_record()
 
                     # Save the registration image
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -222,18 +313,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     if client_pending_tasks.get(client_id, 0) >= MAX_CONCURRENT_TASKS_PER_CLIENT:
                         await websocket.send_json({
                             "status": "error",
-                            "message": "Too many pending tasks. Please wait."
+                            "message": "Server Busy with other images"
                         })
                         continue
                     client_pending_tasks[client_id] += 1
 
-                # Get queues
-                processing_results_queue, websocket_responses_queue = get_queues()
-
-                # Process image for face recognition
+           
                 entry_type = data.get("entry_type", "entry")
 
-                # Submit image processing to process pool
+                # Submit image processing to process pool (CPU intensive task)
                 process_pool = get_process_pool()
                 future = process_pool.submit(
                     process_image_in_process,
@@ -249,14 +337,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Add callback for when the future completes
                 future.add_done_callback(
                     lambda f: handle_future_completion(f, client_id))
-
-                # Start ping task if not already running
-                if not any(task.get_name() == f"ping_{client_id}" 
-                         for task in asyncio.all_tasks()):
-                    asyncio.create_task(
-                        ping_client(websocket),
-                        name=f"ping_{client_id}"
-                    )
 
             elif data.get("type") == "ping":
                 # Respond to ping

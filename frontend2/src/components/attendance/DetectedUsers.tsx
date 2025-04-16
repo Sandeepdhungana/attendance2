@@ -26,10 +26,10 @@ export const DetectedUsers: React.FC<DetectedUsersProps> = ({ users }) => {
         </Typography>
         <List>
           {users.map((user, index) => (
-            <div key={`${user.user_id}-${index}`}>
+            <div key={`${user.employee_id}-${index}`}>
               <ListItem>
                 <ListItemText
-                  primary={`${user.name} (${user.user_id})`}
+                  primary={`${user.name} (${user.employee_id})`}
                   secondary={
                     <>
                       <Typography component="span" variant="body2" color="text.primary">

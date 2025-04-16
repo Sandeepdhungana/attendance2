@@ -1,4 +1,5 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from sqlalchemy.orm import Session
 from typing import Dict, Any
 import uuid
 import asyncio
@@ -8,7 +9,7 @@ import numpy as np
 import cv2
 import os
 from datetime import datetime
-from app.database import query, create, delete, update
+from app.database import get_db
 from app.dependencies import (
     get_process_pool,
     get_pending_futures,
@@ -16,7 +17,7 @@ from app.dependencies import (
     get_queues,
     get_active_connections,
     get_face_recognition,
-    get_employee_cache
+    get_cached_users
 )
 from app.utils.websocket import (
     ping_client, 
@@ -27,6 +28,7 @@ from app.utils.websocket import (
 )
 from app.utils.processing import process_image_in_process
 from app.utils.time_utils import get_local_time
+from app.models import User, Attendance
 from app.config import IMAGES_DIR, MAX_CONCURRENT_TASKS_PER_CLIENT
 
 logger = logging.getLogger(__name__)
@@ -34,7 +36,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.websocket("/ws/attendance")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)):
     await websocket.accept()
     
     # Generate unique client ID
@@ -55,93 +57,88 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if data.get("type") == "get_attendance":
                 # Get all attendance records
-                attendance_records = query("Attendance")
-
+                attendance_records = db.query(Attendance).order_by(
+                    Attendance.timestamp.desc()).all()
                 await websocket.send_json({
                     "type": "attendance_data",
                     "data": [{
-                        "id": record["objectId"],
-                        "employee_id": record["employee_id"],
-                        "name": record.get("employee_name", "Unknown Employee"),
-                        "entry_time": record.get("timestamp", None),
-                        "exit_time": record.get("exit_time", None),
-                        "confidence": record.get("confidence", 0),
-                        "is_late": record.get("is_late", False),
-                        "is_early_exit": record.get("is_early_exit", False),
-                        "late_message": f"Late arrival: {record['timestamp']}" if record.get("is_late", False) else None,
-                        "early_exit_message": f"Early exit: {record['exit_time']}" if record.get("is_early_exit", False) else None
+                        "id": record.id,
+                        "user_id": record.user_id,
+                        "name": record.user.name if record.user else "Unknown User",
+                        "entry_time": record.timestamp.isoformat() if record.timestamp else None,
+                        "exit_time": record.exit_time.isoformat() if record.exit_time else None,
+                        "confidence": record.confidence,
+                        "is_late": record.is_late,
+                        "is_early_exit": record.is_early_exit,
+                        "late_message": f"Late arrival: {record.timestamp.strftime('%H:%M')}" if record.is_late else None,
+                        "early_exit_message": f"Early exit: {record.exit_time.strftime('%H:%M')}" if record.is_early_exit else None
                     } for record in attendance_records]
                 })
 
-            elif data.get("type") == "get_employees":
-                # Get all employees
-                employees = query("Employee")
+            elif data.get("type") == "get_users":
+                # Get all users from cache
+                users = get_cached_users(db)
                 await websocket.send_json({
-                    "type": "employee_data",
+                    "type": "user_data",
                     "data": [{
-                        "employee_id": employee["employee_id"],
-                        "name": employee["name"],
-                        "created_at": employee.get("createdAt", "")
-                    } for employee in employees]
+                        "user_id": user.user_id,
+                        "name": user.name,
+                        "created_at": user.created_at.isoformat()
+                    } for user in users]
                 })
 
             elif data.get("type") == "delete_attendance":
                 # Delete attendance record
                 attendance_id = data.get("attendance_id")
                 if attendance_id:
-                    # Get attendance record first to get employee information
-                    attendance_record = query("Attendance", where={"objectId": attendance_id}, limit=1)
-                    if attendance_record:
-                        attendance = attendance_record[0]
-                        # Delete attendance record
-                        delete("Attendance", attendance_id)
-                        
-                        # Broadcast attendance deletion
-                        await broadcast_attendance_update({
+                    attendance = db.query(Attendance).filter(
+                        Attendance.id == attendance_id).first()
+                    if attendance:
+                        db.delete(attendance)
+                        db.commit()
+                        await broadcast_attendance_update([{
                             "action": "delete",
-                            "employee_id": attendance["employee_id"],
-                            "name": attendance.get("employee_name", "Unknown Employee"),
+                            "user_id": attendance.user_id,
+                            "name": attendance.user.name,
                             "timestamp": get_local_time().isoformat()
-                        })
+                        }])
 
-            elif data.get("type") == "delete_employee":
-                # Delete employee
-                employee_id = data.get("employee_id")
-                if employee_id:
-                    # Get employee info before deletion
-                    employee = query("Employee", where={"employee_id": employee_id}, limit=1)
-                    if employee:
-                        employee = employee[0]
-                        # Delete the employee
-                        delete("Employee", employee["objectId"])
-                        
-                        # Broadcast employee deletion
-                        await broadcast_attendance_update({
-                            "action": "delete_employee",
-                            "employee_id": employee_id,
-                            "name": employee["name"],
+            elif data.get("type") == "delete_user":
+                # Delete user
+                user_id = data.get("user_id")
+                if user_id:
+                    user = db.query(User).filter(
+                        User.user_id == user_id).first()
+                    if user:
+                        db.delete(user)
+                        db.commit()
+                        await broadcast_attendance_update([{
+                            "action": "delete_user",
+                            "user_id": user_id,
+                            "name": user.name,
                             "timestamp": get_local_time().isoformat()
-                        })
+                        }])
 
-            elif data.get("type") == "register_employee":
-                # Register new employee
-                employee_id = data.get("employee_id")
+            elif data.get("type") == "register_user":
+                # Register new user
+                user_id = data.get("user_id")
                 name = data.get("name")
                 image_data = data.get("image")
 
-                if not all([employee_id, name, image_data]):
+                if not all([user_id, name, image_data]):
                     await websocket.send_json({
                         "status": "error",
-                        "message": "Missing required fields (employee_id, name, or image)"
+                        "message": "Missing required fields (user_id, name, or image)"
                     })
                     continue
 
-                # Check if employee already exists
-                existing_employee = query("Employee", where={"employee_id": employee_id}, limit=1)
-                if existing_employee:
+                # Check if user already exists
+                existing_user = db.query(User).filter(
+                    User.user_id == user_id).first()
+                if existing_user:
                     await websocket.send_json({
                         "status": "error",
-                        "message": "Employee ID already registered"
+                        "message": "User ID already registered"
                     })
                     continue
 
@@ -173,47 +170,40 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
                         continue
 
-                    # Create new employee with embedding
-                    current_time = get_local_time().isoformat()
-                    new_employee = create("Employee", {
-                        "employee_id": employee_id,
-                        "name": name,
-                        "embedding": face_recognition.embedding_to_str(embedding),
-                        "created_at": {
-                            "__type": "Date",
-                            "iso": current_time
-                        },
-                        "updated_at": {
-                            "__type": "Date",
-                            "iso": current_time
-                        }
-                    })
+                    # Create new user with embedding
+                    new_user = User(
+                        user_id=user_id,
+                        name=name,
+                        embedding=face_recognition.embedding_to_str(embedding)
+                    )
+                    db.add(new_user)
+                    db.commit()
 
                     # Save the registration image
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                    filename = f"register_{employee_id}_{timestamp}.jpg"
+                    filename = f"register_{user_id}_{timestamp}.jpg"
                     filepath = os.path.join(IMAGES_DIR, filename)
                     # cv2.imwrite(filepath, img)
                     logger.info(f"Saved registration image to {filepath}")
 
-                    # Broadcast employee registration
-                    await broadcast_attendance_update({
-                        "action": "register_employee",
-                        "employee_id": employee_id,
+                    # Broadcast user registration
+                    await broadcast_attendance_update([{
+                        "action": "register_user",
+                        "user_id": user_id,
                         "name": name,
                         "timestamp": get_local_time().isoformat()
-                    })
+                    }])
 
                     await websocket.send_json({
                         "status": "success",
-                        "message": "Employee registered successfully"
+                        "message": "User registered successfully"
                     })
 
                 except Exception as e:
-                    logger.error(f"Error registering employee: {str(e)}")
+                    logger.error(f"Error registering user: {str(e)}")
                     await websocket.send_json({
                         "status": "error",
-                        "message": f"Error registering employee: {str(e)}"
+                        "message": f"Error registering user: {str(e)}"
                     })
 
             elif "image" in data:
@@ -226,11 +216,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
                         continue
                     client_pending_tasks[client_id] += 1
-
-                # Get queues for this client
-                queues = get_queues()
-                if client_id not in queues:
-                    queues[client_id] = asyncio.Queue()
 
                 # Process image for face recognition
                 entry_type = data.get("entry_type", "entry")
@@ -252,28 +237,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 future.add_done_callback(
                     lambda f: handle_future_completion(f, client_id))
 
-                # Start processing queue for this client if not already running
-                if not any(task.get_name() == f"queue_processor_{client_id}" 
-                         for task in asyncio.all_tasks()):
-                    asyncio.create_task(
-                        process_queue(),
-                        name=f"queue_processor_{client_id}"
-                    )
-
-                # Start ping task if not already running
-                if not any(task.get_name() == f"ping_{client_id}" 
-                         for task in asyncio.all_tasks()):
-                    asyncio.create_task(
-                        ping_client(websocket),
-                        name=f"ping_{client_id}"
-                    )
-
             elif data.get("type") == "ping":
                 # Respond to ping
                 await websocket.send_json({"type": "pong"})
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket connection {client_id} closed")
+        if client_id in active_connections:
+            del active_connections[client_id]
+        logger.info(f"WebSocket connection {client_id} closed. Total connections: {len(active_connections)}")
     except Exception as e:
         logger.error(f"WebSocket error for client {client_id}: {str(e)}")
         try:
@@ -284,10 +255,12 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
     finally:
-        # Clean up
-        if client_id in active_connections:
-            del active_connections[client_id]
-        with client_pending_tasks_lock:
-            if client_id in client_pending_tasks:
-                del client_pending_tasks[client_id]
+        try:
+            if client_id in active_connections:
+                del active_connections[client_id]
+            with client_pending_tasks_lock:
+                if client_id in client_pending_tasks:
+                    del client_pending_tasks[client_id]
+        except KeyError:
+            pass
         logger.info(f"WebSocket connection {client_id} closed. Total connections: {len(active_connections)}") 

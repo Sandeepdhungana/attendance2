@@ -4,7 +4,7 @@ import base64
 import logging
 from typing import List, Dict, Any
 from ..dependencies import get_face_recognition
-from ..models import Employee, Attendance, OfficeTiming
+from ..models import Employee, Attendance, Shift
 from ..utils.time_utils import get_local_date, get_local_time, convert_to_local_time
 from datetime import datetime, timedelta
 from ..database import query as db_query
@@ -43,13 +43,16 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     if entry_type == "entry":
         if existing_attendance:
             # Check if there's already an entry without exit
+            # Format similarity to 2 decimal places
+            rounded_similarity = round(similarity, 2)
+            
             if not existing_attendance.get("exit_time"):
                 result["processed_employee"] = {
                     "message": "Entry already marked for today",
-                    "employee_id": employee.get("employee_id"),
                     "name": employee.get("name"),
+                    "employee_id": employee.get("employee_id"),
                     "timestamp": existing_attendance.get("timestamp", {}).get("iso"),
-                    "similarity": similarity,
+                    "similarity": rounded_similarity,
                     "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
                     "exit_time": None
                 }
@@ -57,10 +60,9 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                 # If there's an exit time, don't allow re-entry on same day
                 result["processed_employee"] = {
                     "message": "Cannot mark entry again for today after exit",
-                    "employee_id": employee.get("employee_id"),
-                    "name": employee.get("name"),
+                   "name":employee.get("name"),
                     "timestamp": existing_attendance.get("timestamp", {}).get("iso"),
-                    "similarity": similarity,
+                    "similarity": rounded_similarity,
                     "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
                     "exit_time": existing_attendance.get("exit_time", {}).get("iso")
                 }
@@ -72,39 +74,60 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         minutes_late = None
         current_time = get_local_time()
         
-        # Get office timings
-        office_timing = db_query("OfficeTiming", limit=1)
-        office_timing = office_timing[0] if office_timing else None
-        
+        # Get employee shift information
         login_time = None
         grace_period_end = None
+        shift_id = employee.get("shift")
         
-        if office_timing and office_timing.get("login_time"):
-            # Parse login_time from string
-            login_time_str = office_timing.get("login_time")
-            login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
+        if shift_id and isinstance(shift_id, dict) and shift_id.get("objectId"):
+            # Get shift details using the pointer
+            shift = db_query("Shift", 
+                where={"objectId": shift_id.get("objectId")},
+                limit=1
+            )
+            shift = shift[0] if shift else None
             
-            # Convert login_time to timezone-aware datetime for today
-            login_time = datetime.combine(today, 
-                                          datetime.min.time().replace(hour=login_time_hours, 
-                                                                      minute=login_time_minutes))
-            login_time = convert_to_local_time(login_time)
-            
-            # Calculate the grace period end time (1 hour after login time)
-            grace_period_end = login_time + timedelta(hours=1)
-            
-            # Mark as late if entry is after grace period
-            if current_time > grace_period_end:
-                is_late = True
-                time_diff = current_time - login_time
-                minutes_late = int(time_diff.total_seconds() / 60)
-                late_message = f"Late arrival: {current_time.strftime('%H:%M')} ({minutes_late} minutes late, Office time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
+            if shift and shift.get("login_time"):
+                # Parse login_time from string
+                login_time_str = shift.get("login_time")
+                login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
+                
+                # Convert login_time to timezone-aware datetime for today
+                login_time = datetime.combine(today, 
+                                            datetime.min.time().replace(hour=login_time_hours, 
+                                                                        minute=login_time_minutes))
+                login_time = convert_to_local_time(login_time)
+                
+                # Calculate the grace period end time (1 hour after login time or use configured grace period)
+                grace_period_minutes = shift.get("grace_period_minutes", 1)  # Default 60 minutes if not specified
+                grace_period_end = login_time + timedelta(hours=grace_period_minutes)
+                
+                # Mark as late if entry is after grace period
+                if current_time > grace_period_end:
+                    is_late = True
+                    time_diff = current_time - login_time
+                    total_seconds = int(time_diff.total_seconds())
+                    hours_late = total_seconds // 3600
+                    minutes_late = (total_seconds % 3600) // 60
+                    seconds_late = total_seconds % 60
+                    
+                    # Format the time components for display
+                    time_late_str = ""
+                    if hours_late > 0:
+                        time_late_str += f"{hours_late} hours, "
+                    if minutes_late > 0 or hours_late > 0:
+                        time_late_str += f"{minutes_late} minutes, "
+                    time_late_str += f"{seconds_late} seconds"
+                    
+                    # Store total minutes for database consistency
+                    minutes_late_total = int(total_seconds / 60)
+                    
+                    late_message = f"Late arrival: {current_time.strftime('%H:%M:%S')} ({time_late_str} late, Shift time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
 
         # Create new attendance record
-        new_attendance = create("Attendance", {
+        new_attendance_data = {
             "employee_id": employee.get("employee_id"),
-            "employee_name": employee.get("name"),
-            "confidence": similarity,
+            "confidence": round(similarity, 2),
             "is_late": is_late,
             "timestamp": {
                 "__type": "Date",
@@ -113,39 +136,65 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
             "created_at": {
                 "__type": "Date",
                 "iso": current_time.isoformat()
+            },
+            "employee": {
+                "__type": "Pointer",
+                "className": "Employee",
+                "objectId": employee.get("objectId")
             }
-        })
+        }
+        
+        # Add late arrival details if applicable
+        # if is_late:
+        #     new_attendance_data["minutes_late"] = minutes_late_total
+        #     new_attendance_data["hours_late"] = hours_late
+        #     new_attendance_data["minutes_component"] = minutes_late
+        #     new_attendance_data["seconds_late"] = seconds_late
+        #     new_attendance_data["late_message"] = late_message
+        
+        create("Attendance", new_attendance_data)
 
         # Create message for on-time arrival
         message = "Entry marked successfully"
         if is_late:
             message += f" - {late_message}"
         elif login_time and grace_period_end:
-            message += f" - On time (Office time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
+            message += f" - On time (Shift time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
 
+        # Format similarity to 2 decimal places
+        rounded_similarity = round(similarity, 2)
+        
         attendance_data = {
             "action": "entry",
             "employee_id": employee.get("employee_id"),
-            "name": employee.get("name"),
+            "employee_name": employee.get("name"),
             "timestamp": current_time.isoformat(),
-            "similarity": similarity,
+            "similarity": rounded_similarity,
             "is_late": is_late,
             "late_message": late_message,
             "entry_time": current_time.isoformat(),
             "exit_time": None,
-            "minutes_late": minutes_late
+            "minutes_late": minutes_late_total if is_late else None,
+            "time_components": {
+                "hours": hours_late,
+                "minutes": minutes_late,
+                "seconds": seconds_late
+            } if is_late else None
         }
 
         result["processed_employee"] = {**attendance_data, "message": message}
         result["attendance_update"] = attendance_data
 
     else:  # exit
+        # Format similarity to 2 decimal places
+        rounded_similarity = round(similarity, 2)
+        
         if not existing_attendance:
             result["processed_employee"] = {
                 "message": "No entry record found for today",
                 "employee_id": employee.get("employee_id"),
                 "name": employee.get("name"),
-                "similarity": similarity
+                "similarity": rounded_similarity
             }
             return result
         elif existing_attendance.get("exit_time"):
@@ -154,7 +203,7 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                 "employee_id": employee.get("employee_id"),
                 "name": employee.get("name"),
                 "timestamp": existing_attendance.get("exit_time", {}).get("iso"),
-                "similarity": similarity,
+                "similarity": rounded_similarity,
                 "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
                 "exit_time": existing_attendance.get("exit_time", {}).get("iso")
             }
@@ -165,24 +214,32 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         early_exit_message = None
         current_time = get_local_time()
         
-        # Get office timings
-        office_timing = db_query("OfficeTiming", limit=1)
-        office_timing = office_timing[0] if office_timing else None
+        # Get employee shift information
+        logout_time = None
+        shift_id = employee.get("shift")
         
-        if office_timing and office_timing.get("logout_time"):
-            # Parse logout_time from string
-            logout_time_str = office_timing.get("logout_time")
-            logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
+        if shift_id and isinstance(shift_id, dict) and shift_id.get("objectId"):
+            # Get shift details using the pointer
+            shift = db_query("Shift", 
+                where={"objectId": shift_id.get("objectId")},
+                limit=1
+            )
+            shift = shift[0] if shift else None
             
-            # Convert logout_time to timezone-aware datetime for today
-            logout_time = datetime.combine(today, 
-                                         datetime.min.time().replace(hour=logout_time_hours, 
-                                                                    minute=logout_time_minutes))
-            logout_time = convert_to_local_time(logout_time)
-            
-            if current_time < logout_time:
-                is_early_exit = True
-                early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Office time: {logout_time.strftime('%H:%M')})"
+            if shift and shift.get("logout_time"):
+                # Parse logout_time from string
+                logout_time_str = shift.get("logout_time")
+                logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
+                
+                # Convert logout_time to timezone-aware datetime for today
+                logout_time = datetime.combine(today, 
+                                            datetime.min.time().replace(hour=logout_time_hours, 
+                                                                        minute=logout_time_minutes))
+                logout_time = convert_to_local_time(logout_time)
+                
+                if current_time < logout_time:
+                    is_early_exit = True
+                    early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Shift end time: {logout_time.strftime('%H:%M')})"
 
         # Update the existing attendance record with exit time
         update("Attendance", existing_attendance.get("objectId"), {
@@ -197,19 +254,21 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
             }
         })
 
+        # Format similarity to 2 decimal places
+        rounded_similarity = round(similarity, 2)
+        
         attendance_data = {
             "action": "exit",
             "employee_id": employee.get("employee_id"),
-            "name": employee.get("name"),
             "timestamp": current_time.isoformat(),
-            "similarity": similarity,
+            "similarity": rounded_similarity,
             "is_early_exit": is_early_exit,
             "early_exit_message": early_exit_message,
             "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
             "exit_time": current_time.isoformat()
         }
 
-        result["processed_employee"] = {**attendance_data, "message": "Exit marked successfully"}
+        result["processed_employee"] = {**attendance_data, "message": "Exit marked successfully", "name": employee.get("name")}
         result["attendance_update"] = attendance_data
 
     return result

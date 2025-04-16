@@ -37,6 +37,7 @@ export function useDashboard() {
 
       // Fetch attendance records
       const attendanceResponse = await api.get('/attendance');
+      console.log('Attendance data from API:', attendanceResponse.data);
       setRecords(attendanceResponse.data);
 
       // Fetch users
@@ -80,13 +81,20 @@ export function useDashboard() {
         } else if (data.type === 'attendance_update') {
           // Handle attendance update without clearing the data
           if (data.data && Array.isArray(data.data)) {
+            console.log('Received attendance update:', data.data);
             // Update only the changed records
             setRecords(prevRecords => {
               const updatedRecords = [...prevRecords];
               data.data.forEach((update: any) => {
-                const index = updatedRecords.findIndex(r => r.id === update.id);
+                const index = updatedRecords.findIndex(r => r.id === update.id || r.employee_id === update.employee_id);
                 if (index !== -1) {
-                  updatedRecords[index] = { ...updatedRecords[index], ...update };
+                  // Preserve the objectId when updating
+                  const objectId = updatedRecords[index].objectId;
+                  updatedRecords[index] = { 
+                    ...updatedRecords[index], 
+                    ...update,
+                    objectId: objectId // Ensure objectId is preserved
+                  };
                 } else {
                   updatedRecords.push(update);
                 }
@@ -139,18 +147,21 @@ export function useDashboard() {
   };
 
   const handleAttendanceDeleteClick = (record: AttendanceRecord) => {
+    console.log('Deleting attendance record:', record);
     setAttendanceDeleteDialog({ open: true, item: record, loading: false });
   };
 
   const handleAttendanceDeleteConfirm = async () => {
     if (attendanceDeleteDialog.item) {
+      console.log('Confirming deletion for:', attendanceDeleteDialog.item);
       try {
-        await api.delete(`/attendance/${attendanceDeleteDialog.item.id}`);
+        await api.delete(`/attendance/${attendanceDeleteDialog.item.objectId}`);
         setRecords(records.filter(r => r.id !== attendanceDeleteDialog.item?.id));
         setAttendanceDeleteDialog({ open: false, item: null, loading: false });
         // Refresh data
         fetchData();
       } catch (err) {
+        console.error('Error deleting attendance record:', err);
         setError(err instanceof Error ? err.message : 'Failed to delete attendance record');
       }
     }

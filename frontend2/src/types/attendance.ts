@@ -1,8 +1,8 @@
 export interface UserResult {
   message: string;
-  user_id: string;
   name: string;
   timestamp?: string;
+  employee_id?: string;
   similarity?: number;
   is_late?: boolean;
   is_early_exit?: boolean;
@@ -21,8 +21,7 @@ export interface WebSocketResponse {
 }
 
 export interface AttendanceUpdate {
-  user_id: string;
-  name: string;
+  employee_id: string;
   entry_type: 'entry' | 'exit';
   timestamp: string;
   is_late?: boolean;

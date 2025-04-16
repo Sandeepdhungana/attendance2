@@ -42,11 +42,10 @@ export default function Dashboard() {
   } = useDashboard();
 
   const attendanceColumns: GridColDef[] = [
-    { field: 'id', headerName: 'ID', width: 120 },
-    { field: 'user_id', headerName: 'Employee ID', width: 120 },
-    { field: 'name', headerName: 'Name', width: 120, },
-    { field: 'entry_time', headerName: 'Entry Time', width: 120, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
-    { field: 'exit_time', headerName: 'Exit Time', width: 120, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
+    { field: 'employee_id', headerName: 'Employee ID', width: 150 },
+    { field: 'objectId', headerName: 'Object ID', width: 150 },
+    { field: 'entry_time', headerName: 'Entry Time', width: 200, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
+    { field: 'exit_time', headerName: 'Exit Time', width: 200, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
     { field: 'confidence', headerName: 'Confidence', width: 100 },
     { 
       field: 'is_late', 
@@ -213,7 +212,7 @@ export default function Dashboard() {
       <DeleteDialog<AttendanceRecord>
         dialog={attendanceDeleteDialog}
         title="Delete Attendance Record"
-        getContentText={(record) => `Are you sure you want to delete the attendance record for ${record.name}?`}
+        getContentText={(record) => `Are you sure you want to delete the attendance record for employee ${record.employee_id}?`}
         onClose={() => setAttendanceDeleteDialog(prev => ({ ...prev, open: false }))}
         onConfirm={handleAttendanceDeleteConfirm}
       />

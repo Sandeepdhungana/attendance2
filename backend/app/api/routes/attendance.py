@@ -47,13 +47,20 @@ def get_attendance():
 def delete_attendance(attendance_id: str):
     """Delete an attendance record"""
     try:
+        logger.info(f"Attempting to delete attendance record with ID: {attendance_id}")
+        
         # Get the attendance record first
         attendance = query("Attendance", where={"objectId": attendance_id}, limit=1)
+        
         if not attendance:
+            logger.warning(f"Attendance record not found with ID: {attendance_id}")
             raise HTTPException(status_code=404, detail="Attendance record not found")
         
         attendance = attendance[0]
         employee_id = attendance["employee_id"]
+        objectId = attendance["objectId"]
+        
+        logger.info(f"Found attendance record for employee ID: {employee_id}")
         
         # Get employee info
         employee = query("Employee", where={"employee_id": employee_id}, limit=1)
@@ -61,18 +68,20 @@ def delete_attendance(attendance_id: str):
         
         # Delete the attendance record
         delete("Attendance", attendance_id)
+        logger.info(f"Successfully deleted attendance record with ID: {attendance_id}")
         
         # Create attendance update for broadcasting
         attendance_update = {
             "action": "delete",
             "employee_id": employee_id,
-            "name": employee_name,
+            "id": employee_id,  # Set id for proper matching in frontend
+            "objectId": objectId,  # Include objectId for proper referencing
             "attendance_id": attendance_id,
             "timestamp": get_local_time().isoformat()
         }
         
-        # Add the update to the processing results queue
-        processing_results_queue, _ = get_queues()
+        # Add the update to the processing results queue for broadcasting to all clients
+        processing_results_queue, websocket_responses_queue = get_queues()
         processing_results_queue.put({
             "type": "attendance_update",
             "data": [attendance_update]

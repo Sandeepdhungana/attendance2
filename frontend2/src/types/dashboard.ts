@@ -1,7 +1,7 @@
 export interface AttendanceRecord {
-  id: number;
-  user_id: string;
-  name: string;
+  id: string;
+  objectId: string;
+  employee_id: string;
   entry_time: string;
   exit_time: string;
   confidence: number;
