@@ -15,8 +15,11 @@ IMAGES_DIR = "images"
 if not os.path.exists(IMAGES_DIR):
     os.makedirs(IMAGES_DIR)
 
-# Database settings
-DATABASE_URL = "sqlite:///./attendance.db"
+# Back4App settings
+BACK4APP_APPLICATION_ID = "VXlRAyM9B1ejoZuMmMthHVZgaWs0WJf4s9AIN0Be"
+BACK4APP_REST_API_KEY = "6dALgL7Y4M8qwqAZewdQZBGRKP2DdD9TgXL64qTa"
+BACK4APP_MASTER_KEY = "78CsqfmbtuWHclu8gnJuuip0VcgCnkeRboZz8m1x"
+BACK4APP_SERVER_URL = "https://parseapi.back4app.com"
 
 # Face recognition settings
 FACE_RECOGNITION_THRESHOLD = 0.6  # Minimum similarity score for face recognition 

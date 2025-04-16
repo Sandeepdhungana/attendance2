@@ -87,9 +87,14 @@ class FaceRecognition:
 
     def find_match_for_user(self, query_embedding: np.ndarray, user: Any, threshold: float) -> Tuple[Any, float]:
         """Find match for a single user (to be used in parallel)"""
-        stored_embedding = self.str_to_embedding(user.embedding)
-        similarity = self.compare_faces(query_embedding, stored_embedding)
-        return user, similarity
+        try:
+            # Use dictionary access for user records from the database
+            stored_embedding = self.str_to_embedding(user.get("embedding"))
+            similarity = self.compare_faces(query_embedding, stored_embedding)
+            return user, similarity
+        except Exception as e:
+            logger.error(f"Error matching user: {str(e)}")
+            return user, 0.0
 
     def find_matches_for_embeddings(self, query_embeddings: List[np.ndarray], users: List[Any], threshold: float = None) -> List[Dict[str, Any]]:
         """Find matches for multiple face embeddings using parallel processing"""
@@ -122,7 +127,7 @@ class FaceRecognition:
             
             if best_similarity >= threshold and best_match:
                 matches.append({
-                    'user': best_match,
+                    'employee': best_match,
                     'similarity': best_similarity
                 })
                 

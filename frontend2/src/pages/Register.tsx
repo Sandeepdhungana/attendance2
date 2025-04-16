@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -8,16 +8,33 @@ import {
   Grid,
   Snackbar,
   Alert,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import { useWebSocket } from '../App';
 import { useCameraCapture } from '../hooks/useCameraCapture';
 import { CameraView } from '../components/register/CameraView';
 import { ImagePreview } from '../components/register/ImagePreview';
 import { CaptureTypeSelector } from '../components/register/CaptureTypeSelector';
+import api from '../api/config';
+
+interface Shift {
+  objectId: string;
+  name: string;
+  login_time: string;
+  logout_time: string;
+}
 
 const Register: React.FC = () => {
-  const [user_id, setUserId] = useState('');
+  const [employee_id, setEmployeeId] = useState('');
   const [name, setName] = useState('');
+  const [department, setDepartment] = useState('');
+  const [position, setPosition] = useState('');
+  const [status, setStatus] = useState('active');
+  const [shift_id, setShiftId] = useState('');
+  const [shifts, setShifts] = useState<Shift[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const { sendMessage } = useWebSocket();
@@ -36,12 +53,26 @@ const Register: React.FC = () => {
     setImage,
   } = useCameraCapture();
 
+  useEffect(() => {
+    fetchShifts();
+  }, []);
+
+  const fetchShifts = async () => {
+    try {
+      const response = await api.get('/shifts');
+      setShifts(response.data);
+    } catch (error) {
+      console.error('Error fetching shifts:', error);
+      setError('Failed to load shifts');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
 
-    if (!user_id || !name) {
+    if (!employee_id || !name || !department || !position || !shift_id) {
       setError('Please fill in all fields');
       return;
     }
@@ -52,19 +83,58 @@ const Register: React.FC = () => {
     }
 
     try {
-      sendMessage({
-        type: 'register_user',
-        user_id,
-        name,
-        image
+      // Convert base64 to File object
+      let imageFile: File;
+      if (typeof image === 'string') {
+        // If image is a base64 string
+        const base64Data = image.split(',')[1];
+        const byteCharacters = atob(base64Data);
+        const byteArrays = [];
+        
+        for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
+          const slice = byteCharacters.slice(offset, offset + 1024);
+          const byteNumbers = new Array(slice.length);
+          
+          for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i);
+          }
+          
+          const byteArray = new Uint8Array(byteNumbers);
+          byteArrays.push(byteArray);
+        }
+        
+        const blob = new Blob(byteArrays, { type: 'image/jpeg' });
+        imageFile = new File([blob], 'employee_photo.jpg', { type: 'image/jpeg' });
+      } else {
+        // If image is already a File object
+        imageFile = image;
+      }
+
+      const formData = new FormData();
+      formData.append('employee_id', employee_id);
+      formData.append('name', name);
+      formData.append('department', department);
+      formData.append('position', position);
+      formData.append('status', status);
+      formData.append('shift_id', shift_id);
+      formData.append('image', imageFile);
+
+      await api.post('/employees/register', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
       });
 
-      setSuccess('User registered successfully!');
-      setUserId('');
+      setSuccess('Employee registered successfully!');
+      setEmployeeId('');
       setName('');
+      setDepartment('');
+      setPosition('');
+      setStatus('active');
+      setShiftId('');
       setImage(null);
     } catch (err) {
-      setError('Failed to register user. Please try again.');
+      setError('Failed to register employee. Please try again.');
       console.error('Registration error:', err);
     }
   };
@@ -72,7 +142,7 @@ const Register: React.FC = () => {
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
       <Typography variant="h4" gutterBottom>
-        Register User
+        Register Employee
       </Typography>
 
       <Paper sx={{ p: 3 }}>
@@ -81,9 +151,9 @@ const Register: React.FC = () => {
             <Grid item xs={12}>
               <TextField
                 fullWidth
-                label="User ID"
-                value={user_id}
-                onChange={(e) => setUserId(e.target.value)}
+                label="Employee ID"
+                value={employee_id}
+                onChange={(e) => setEmployeeId(e.target.value)}
                 required
               />
             </Grid>
@@ -96,6 +166,58 @@ const Register: React.FC = () => {
                 onChange={(e) => setName(e.target.value)}
                 required
               />
+            </Grid>
+
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Department"
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                required
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Position"
+                value={position}
+                onChange={(e) => setPosition(e.target.value)}
+                required
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Status</InputLabel>
+                <Select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value)}
+                  label="Status"
+                >
+                  <MenuItem value="active">Active</MenuItem>
+                  <MenuItem value="inactive">Inactive</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+
+            <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Shift</InputLabel>
+                <Select
+                  value={shift_id}
+                  onChange={(e) => setShiftId(e.target.value)}
+                  label="Shift"
+                  required
+                >
+                  {shifts.map((shift) => (
+                    <MenuItem key={shift.objectId} value={shift.objectId}>
+                      {shift.name} ({shift.login_time} - {shift.logout_time})
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             </Grid>
 
             <Grid item xs={12}>

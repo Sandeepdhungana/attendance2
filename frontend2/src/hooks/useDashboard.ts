@@ -40,7 +40,7 @@ export function useDashboard() {
       setRecords(attendanceResponse.data);
 
       // Fetch users
-      const usersResponse = await api.get('/users');
+      const usersResponse = await api.get('/employees');
       setUsers(usersResponse.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
@@ -127,7 +127,7 @@ export function useDashboard() {
   const handleUserDeleteConfirm = async () => {
     if (userDeleteDialog.item) {
       try {
-        await api.delete(`/users/${userDeleteDialog.item.user_id}`);
+        await api.delete(`/employee/${userDeleteDialog.item.user_id}`);
         setUsers(users.filter(u => u.user_id !== userDeleteDialog.item?.user_id));
         setUserDeleteDialog({ open: false, item: null, loading: false });
         // Refresh data

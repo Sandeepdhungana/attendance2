@@ -4,15 +4,16 @@ import base64
 import logging
 from typing import List, Dict, Any
 from ..dependencies import get_face_recognition
-from ..database import get_db
-from ..models import User, Attendance, OfficeTiming
+from ..models import Employee, Attendance, OfficeTiming
 from ..utils.time_utils import get_local_date, get_local_time, convert_to_local_time
 from datetime import datetime, timedelta
+from ..database import query as db_query
+from ..database import create, update
 
 logger = logging.getLogger(__name__)
 
-def process_attendance_for_user(user: User, similarity: float, entry_type: str, db):
-    """Process attendance for a user with consistent duplicate checking"""
+def process_attendance_for_employee(employee: Dict[str, Any], similarity: float, entry_type: str):
+    """Process attendance for an employee with consistent duplicate checking"""
     # Check if attendance already marked for today
     today = get_local_date()
     today_start = datetime.combine(today, datetime.min.time())
@@ -21,54 +22,72 @@ def process_attendance_for_user(user: User, similarity: float, entry_type: str, 
     today_end = convert_to_local_time(today_end)
 
     # Get any existing attendance record for today
-    existing_attendance = db.query(Attendance).filter(
-        Attendance.user_id == user.user_id,
-        Attendance.timestamp >= today_start,
-        Attendance.timestamp <= today_end
-    ).first()
+    existing_attendance = db_query("Attendance", 
+        where={
+            "employee_id": employee.get("employee_id"),
+            "timestamp": {
+                "$gte": {"__type": "Date", "iso": today_start.isoformat()},
+                "$lte": {"__type": "Date", "iso": today_end.isoformat()}
+            }
+        },
+        limit=1
+    )
+    
+    existing_attendance = existing_attendance[0] if existing_attendance else None
 
     result = {
-        "processed_user": None,
+        "processed_employee": None,
         "attendance_update": None
     }
 
     if entry_type == "entry":
         if existing_attendance:
             # Check if there's already an entry without exit
-            if not existing_attendance.exit_time:
-                result["processed_user"] = {
+            if not existing_attendance.get("exit_time"):
+                result["processed_employee"] = {
                     "message": "Entry already marked for today",
-                    "user_id": user.user_id,
-                    "name": user.name,
-                    "timestamp": existing_attendance.timestamp.isoformat(),
+                    "employee_id": employee.get("employee_id"),
+                    "name": employee.get("name"),
+                    "timestamp": existing_attendance.get("timestamp", {}).get("iso"),
                     "similarity": similarity,
-                    "entry_time": existing_attendance.timestamp.isoformat(),
+                    "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
                     "exit_time": None
                 }
             else:
                 # If there's an exit time, don't allow re-entry on same day
-                result["processed_user"] = {
+                result["processed_employee"] = {
                     "message": "Cannot mark entry again for today after exit",
-                    "user_id": user.user_id,
-                    "name": user.name,
-                    "timestamp": existing_attendance.timestamp.isoformat(),
+                    "employee_id": employee.get("employee_id"),
+                    "name": employee.get("name"),
+                    "timestamp": existing_attendance.get("timestamp", {}).get("iso"),
                     "similarity": similarity,
-                    "entry_time": existing_attendance.timestamp.isoformat(),
-                    "exit_time": existing_attendance.exit_time.isoformat()
+                    "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
+                    "exit_time": existing_attendance.get("exit_time", {}).get("iso")
                 }
             return result
 
-        # New entry logic for users without existing attendance
+        # New entry logic for employees without existing attendance
         is_late = False
         late_message = None
         minutes_late = None
         current_time = get_local_time()
         
         # Get office timings
-        office_timing = db.query(OfficeTiming).first()
-        if office_timing and office_timing.login_time:
+        office_timing = db_query("OfficeTiming", limit=1)
+        office_timing = office_timing[0] if office_timing else None
+        
+        login_time = None
+        grace_period_end = None
+        
+        if office_timing and office_timing.get("login_time"):
+            # Parse login_time from string
+            login_time_str = office_timing.get("login_time")
+            login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
+            
             # Convert login_time to timezone-aware datetime for today
-            login_time = datetime.combine(today, office_timing.login_time.time())
+            login_time = datetime.combine(today, 
+                                          datetime.min.time().replace(hour=login_time_hours, 
+                                                                      minute=login_time_minutes))
             login_time = convert_to_local_time(login_time)
             
             # Calculate the grace period end time (1 hour after login time)
@@ -81,69 +100,84 @@ def process_attendance_for_user(user: User, similarity: float, entry_type: str, 
                 minutes_late = int(time_diff.total_seconds() / 60)
                 late_message = f"Late arrival: {current_time.strftime('%H:%M')} ({minutes_late} minutes late, Office time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
 
-        new_attendance = Attendance(
-            user_id=user.user_id,
-            confidence=similarity,
-            is_late=is_late,
-            timestamp=current_time
-        )
-        db.add(new_attendance)
-        db.commit()
+        # Create new attendance record
+        new_attendance = create("Attendance", {
+            "employee_id": employee.get("employee_id"),
+            "employee_name": employee.get("name"),
+            "confidence": similarity,
+            "is_late": is_late,
+            "timestamp": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            },
+            "created_at": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            }
+        })
 
         # Create message for on-time arrival
         message = "Entry marked successfully"
         if is_late:
             message += f" - {late_message}"
-        else:
+        elif login_time and grace_period_end:
             message += f" - On time (Office time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
 
         attendance_data = {
             "action": "entry",
-            "user_id": user.user_id,
-            "name": user.name,
-            "timestamp": new_attendance.timestamp.isoformat(),
+            "employee_id": employee.get("employee_id"),
+            "name": employee.get("name"),
+            "timestamp": current_time.isoformat(),
             "similarity": similarity,
             "is_late": is_late,
             "late_message": late_message,
-            "entry_time": new_attendance.timestamp.isoformat(),
+            "entry_time": current_time.isoformat(),
             "exit_time": None,
             "minutes_late": minutes_late
         }
 
-        result["processed_user"] = {**attendance_data, "message": message}
+        result["processed_employee"] = {**attendance_data, "message": message}
         result["attendance_update"] = attendance_data
 
     else:  # exit
         if not existing_attendance:
-            result["processed_user"] = {
+            result["processed_employee"] = {
                 "message": "No entry record found for today",
-                "user_id": user.user_id,
-                "name": user.name,
+                "employee_id": employee.get("employee_id"),
+                "name": employee.get("name"),
                 "similarity": similarity
             }
             return result
-        elif existing_attendance.exit_time:
-            result["processed_user"] = {
+        elif existing_attendance.get("exit_time"):
+            result["processed_employee"] = {
                 "message": "Exit already marked for today",
-                "user_id": user.user_id,
-                "name": user.name,
-                "timestamp": existing_attendance.exit_time.isoformat(),
+                "employee_id": employee.get("employee_id"),
+                "name": employee.get("name"),
+                "timestamp": existing_attendance.get("exit_time", {}).get("iso"),
                 "similarity": similarity,
-                "entry_time": existing_attendance.timestamp.isoformat(),
-                "exit_time": existing_attendance.exit_time.isoformat()
+                "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
+                "exit_time": existing_attendance.get("exit_time", {}).get("iso")
             }
             return result
 
-        # Process exit for users with existing entry but no exit
+        # Process exit for employees with existing entry but no exit
         is_early_exit = False
         early_exit_message = None
         current_time = get_local_time()
         
         # Get office timings
-        office_timing = db.query(OfficeTiming).first()
-        if office_timing and office_timing.logout_time:
+        office_timing = db_query("OfficeTiming", limit=1)
+        office_timing = office_timing[0] if office_timing else None
+        
+        if office_timing and office_timing.get("logout_time"):
+            # Parse logout_time from string
+            logout_time_str = office_timing.get("logout_time")
+            logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
+            
             # Convert logout_time to timezone-aware datetime for today
-            logout_time = datetime.combine(today, office_timing.logout_time.time())
+            logout_time = datetime.combine(today, 
+                                         datetime.min.time().replace(hour=logout_time_hours, 
+                                                                    minute=logout_time_minutes))
             logout_time = convert_to_local_time(logout_time)
             
             if current_time < logout_time:
@@ -151,40 +185,37 @@ def process_attendance_for_user(user: User, similarity: float, entry_type: str, 
                 early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Office time: {logout_time.strftime('%H:%M')})"
 
         # Update the existing attendance record with exit time
-        existing_attendance.exit_time = current_time
-        existing_attendance.is_early_exit = is_early_exit
-        db.commit()
+        update("Attendance", existing_attendance.get("objectId"), {
+            "exit_time": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            },
+            "is_early_exit": is_early_exit,
+            "updated_at": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            }
+        })
 
         attendance_data = {
             "action": "exit",
-            "user_id": user.user_id,
-            "name": user.name,
+            "employee_id": employee.get("employee_id"),
+            "name": employee.get("name"),
             "timestamp": current_time.isoformat(),
             "similarity": similarity,
             "is_early_exit": is_early_exit,
             "early_exit_message": early_exit_message,
-            "attendance_id": existing_attendance.id,
-            "entry_time": existing_attendance.timestamp.isoformat(),
-            "exit_time": current_time.isoformat(),
-            "show_early_exit_dialog": is_early_exit,
-            "user_name": user.name,
-            "reason": ""
+            "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
+            "exit_time": current_time.isoformat()
         }
 
-        result["processed_user"] = {
-            **attendance_data,
-            "message": "Exit recorded successfully" + (f" - {early_exit_message}" if early_exit_message else ""),
-            "show_early_exit_dialog": is_early_exit,
-            "user_name": user.name,
-            "reason": ""
-        }
+        result["processed_employee"] = {**attendance_data, "message": "Exit marked successfully"}
         result["attendance_update"] = attendance_data
 
     return result
 
 def process_image_in_process(image_data: str, entry_type: str, client_id: str):
     """Process image in a separate process"""
-    db = next(get_db())
     try:
         # Remove data URL prefix if present
         if "," in image_data:
@@ -206,43 +237,41 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
         if not face_embeddings:
             return [], [], {}, 1
 
-        # Get all users from the database
-        users = db.query(User).all()
+        # Get all employees from the database
+        employees = db_query("Employee")
 
         # Find matches for all detected faces
-        matches = face_recognition.find_matches_for_embeddings(face_embeddings, users)
+        matches = face_recognition.find_matches_for_embeddings(face_embeddings, employees)
 
         if not matches:
             return [], [], {}, 0
 
-        # Process each matched user
-        processed_users = []
+        # Process each matched employee
+        processed_employees = []
         attendance_updates = []
-        last_recognized_users = {}
+        last_recognized_employees = {}
 
         for match in matches:
-            user = match['user']
+            employee = match['employee']
             similarity = match['similarity']
 
-            # Update last recognized users
-            last_recognized_users[user.user_id] = {
-                'user': user,
+            # Update last recognized employees
+            last_recognized_employees[employee.get("employee_id")] = {
+                'employee': employee,
                 'similarity': similarity
             }
 
             # Process attendance using shared function
-            result = process_attendance_for_user(user, similarity, entry_type, db)
+            result = process_attendance_for_employee(employee, similarity, entry_type)
             
-            if result["processed_user"]:
-                processed_users.append(result["processed_user"])
+            if result["processed_employee"]:
+                processed_employees.append(result["processed_employee"])
             
             if result["attendance_update"]:
                 attendance_updates.append(result["attendance_update"])
 
-        return processed_users, attendance_updates, last_recognized_users, 0
+        return processed_employees, attendance_updates, last_recognized_employees, 0
 
     except Exception as e:
-        logger.error(f"Error processing image in process: {str(e)}")
-        return [], [], {}, 0
-    finally:
-        db.close() 
+        logger.error(f"Error processing image: {str(e)}")
+        return [], [], {}, 0 

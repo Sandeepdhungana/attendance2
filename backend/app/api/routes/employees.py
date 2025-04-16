@@ -1,0 +1,182 @@
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
+from typing import List, Dict, Any, Optional
+from app.services.employee import get_employees, delete_employee
+from app.dependencies import get_face_recognition
+from app.utils.websocket import broadcast_attendance_update
+from app.utils.time_utils import get_local_time
+from app.dependencies import get_queues
+from app.models import Employee
+from pydantic import BaseModel
+import cv2
+import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+class EmployeeUpdate(BaseModel):
+    employee_id: Optional[str] = None
+    department: Optional[str] = None
+    position: Optional[str] = None
+    status: Optional[str] = None
+    shift_id: Optional[str] = None
+
+@router.get("/employees")
+def get_employees_route():
+    """Get all employees"""
+    try:
+        employees = get_employees()
+        return employees
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/employees/{employee_id}")
+def get_employee_route(employee_id: str):
+    """Get a specific employee"""
+    try:
+        employee = Employee().get(employee_id)
+        if not employee:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        return employee
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.put("/employees/{employee_id}")
+async def update_employee_route(
+    employee_id: str,
+    employee_data: EmployeeUpdate
+):
+    """Update employee details"""
+    try:
+        update_data = {}
+        print(employee_data)
+        
+        if employee_data.department:
+            update_data["department"] = employee_data.department
+        if employee_data.position:
+            update_data["position"] = employee_data.position
+        if employee_data.status:
+            update_data["status"] = employee_data.status
+        if employee_data.shift_id:
+            update_data["shift"] = {
+                "__type": "Pointer",
+                "className": "Shift",
+                "objectId": employee_data.shift_id
+            }
+
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No update data provided")
+
+        # Get current time as a datetime object
+        current_time = get_local_time()
+        update_data["updatedAt"] = {
+            "__type": "Date",
+            "iso": current_time.isoformat()
+        }
+        
+        result = Employee().update(employee_id, update_data)
+        return {
+            "message": "Employee details updated successfully",
+            "employee": result
+        }
+    except Exception as e:
+        logger.error(f"Error updating employee: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/employees/{employee_id}")
+def delete_employee_route(employee_id: str):
+    """Delete an employee"""
+    try:
+        result = delete_employee(employee_id)
+        # Broadcast user deletion
+        attendance_update = {
+            "action": "delete_user",
+            "user_id": employee_id,
+            "timestamp": get_local_time().isoformat()
+        }
+        processing_results_queue, _ = get_queues()
+        processing_results_queue.put({
+            "type": "attendance_update",
+            "data": [attendance_update]
+        })
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": str(e),
+                "employee_id": employee_id,
+            }
+        )
+
+@router.post("/employees/register")
+async def register_employee(
+    employee_id: str = Form(...),
+    name: str = Form(...),
+    department: str = Form(...),
+    position: str = Form(...),
+    status: str = Form("active"),
+    shift_id: str = Form(...),
+    image: UploadFile = File(...)
+):
+    """Register a new employee"""
+    try:
+        # Read and decode image
+        contents = await image.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        # Get face embedding
+        face_recognition = get_face_recognition()
+        embedding = face_recognition.get_embedding(img)
+        if embedding is None:
+            raise HTTPException(
+                status_code=400, detail="No face detected in image")
+
+        # Check if employee already exists
+        employee_model = Employee()
+        existing_employee = employee_model.query(where={"employee_id": employee_id})
+        if existing_employee:
+            raise HTTPException(
+                status_code=400,
+                detail="Employee ID already registered"
+            )
+
+        # Create new employee
+        new_employee = employee_model.create({
+            "employee_id": employee_id,
+            "name": name,
+            "department": department,
+            "position": position,
+            "status": status,
+            "embedding": face_recognition.embedding_to_str(embedding),
+            "shift": {
+                "__type": "Pointer",
+                "className": "Shift",
+                "objectId": shift_id
+            }
+        })
+
+        # Broadcast user registration
+        attendance_update = {
+            "action": "register_user",
+            "user_id": employee_id,
+            "name": name,
+            "timestamp": get_local_time().isoformat()
+        }
+        processing_results_queue, _ = get_queues()
+        processing_results_queue.put({
+            "type": "attendance_update",
+            "data": [attendance_update]
+        })
+
+        logger.info(f"Employee registered successfully: {employee_id} ({name})")
+        return {"message": "Employee registered successfully"}
+
+    except Exception as e:
+        logger.error(f"Error registering employee: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        ) 

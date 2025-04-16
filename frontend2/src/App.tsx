@@ -9,6 +9,9 @@ import Users from './pages/Users';
 import Debug from './pages/Debug';
 import OfficeTimings from './pages/OfficeTimings';
 import EarlyExitReasons from './pages/EarlyExitReasons';
+import Shift from './pages/Shift';
+import Shifts from './pages/Shifts';
+import EmployeeShifts from './pages/EmployeeShifts';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 // Create WebSocket context
@@ -135,10 +138,13 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/register" element={<Register />} />
             <Route path="/attendance" element={<Attendance />} />
-            <Route path="/users" element={<Users />} />
+            <Route path="/employees" element={<Users />} />
             <Route path="/debug" element={<Debug />} />
             <Route path="/office-timings" element={<OfficeTimings />} />
             <Route path="/early-exit-reasons" element={<EarlyExitReasons />} />
+            <Route path="/shift" element={<Shift />} />
+            <Route path="/shifts" element={<Shifts />} />
+            <Route path="/employee-shifts" element={<EmployeeShifts />} />
           </Routes>
         </Layout>
       </WebSocketProvider>

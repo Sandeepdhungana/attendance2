@@ -6,7 +6,7 @@ import concurrent.futures
 import multiprocessing
 import time
 import logging
-from app.models import User
+from app.models import Employee
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +21,11 @@ websocket_responses_queue = manager.Queue(maxsize=100)
 # Dictionary to store pending futures
 pending_futures = {}
 
-# User cache to avoid frequent database queries
-user_cache = manager.dict()
-user_cache_lock = manager.Lock()
-user_cache_last_updated = manager.Value('d', 0)
-USER_CACHE_TTL = 300  # 5 minutes
+# Employee cache to avoid frequent database queries
+employee_cache = manager.dict()
+employee_cache_lock = manager.Lock()
+employee_cache_last_updated = manager.Value('d', 0)
+EMPLOYEE_CACHE_TTL = 300  # 5 minutes
 
 # Dictionary to track number of pending tasks per client
 client_pending_tasks = manager.dict()
@@ -49,8 +49,8 @@ def get_queues():
 def get_pending_futures():
     return pending_futures
 
-def get_user_cache():
-    return user_cache, user_cache_lock, user_cache_last_updated
+def get_employee_cache():
+    return employee_cache, employee_cache_lock, employee_cache_last_updated
 
 def get_client_tasks():
     return client_pending_tasks, client_pending_tasks_lock
@@ -58,15 +58,15 @@ def get_client_tasks():
 def get_active_connections():
     return active_connections
 
-def get_cached_users(db: Session):
-    """Get users from cache or database with TTL"""
+def get_cached_employees():
+    """Get employees from cache or database with TTL"""
     current_time = time.time()
-    with user_cache_lock:
-        if current_time - user_cache_last_updated.value > USER_CACHE_TTL or not user_cache:
+    with employee_cache_lock:
+        if current_time - employee_cache_last_updated.value > EMPLOYEE_CACHE_TTL or not employee_cache:
             # Update cache
-            users = db.query(User).all()
-            user_cache.clear()
-            user_cache.update({user.user_id: user for user in users})
-            user_cache_last_updated.value = current_time
-            logger.info("User cache updated")
-        return list(user_cache.values()) 
+            employees = Employee().query()
+            employee_cache.clear()
+            employee_cache.update({employee["objectId"]: employee for employee in employees})
+            employee_cache_last_updated.value = current_time
+            logger.info("Employee cache updated")
+        return list(employee_cache.values()) 

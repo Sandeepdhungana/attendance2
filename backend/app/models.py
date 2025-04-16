@@ -1,73 +1,97 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Boolean, Time
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
-from datetime import datetime, timezone, timedelta
+import requests
+from datetime import datetime
 import pytz
 
-Base = declarative_base()
+# Back4App Parse API configuration
+APPLICATION_ID = "VXlRAyM9B1ejoZuMmMthHVZgaWs0WJf4s9AIN0Be"
+REST_API_KEY = "6dALgL7Y4M8qwqAZewdQZBGRKP2DdD9TgXL64qTa"
+BASE_URL = "https://parseapi.back4app.com/classes"
+
+# Headers for all requests
+HEADERS = {
+    "X-Parse-Application-Id": APPLICATION_ID,
+    "X-Parse-REST-API-Key": REST_API_KEY,
+    "Content-Type": "application/json"
+}
 
 # Get local timezone
 try:
-    local_tz = pytz.timezone('Asia/Kolkata')  # Default to IST, can be changed based on your location
+    local_tz = pytz.timezone('Asia/Kolkata')
 except:
-    # Fallback if pytz is not available
     from datetime import timezone, timedelta
-    local_tz = timezone(timedelta(hours=5, minutes=30))  # IST offset as fallback
+    local_tz = timezone(timedelta(hours=5, minutes=30))
 
 def get_local_time():
     """Get current time in local timezone"""
     return datetime.now(local_tz)
 
-class User(Base):
-    __tablename__ = "users"
+class BaseModel:
+    def __init__(self, class_name):
+        self.class_name = class_name
+        self.base_url = f"{BASE_URL}/{class_name}"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, unique=True, index=True)
-    name = Column(String)
-    embedding = Column(String)  # Store face embedding as string (will be converted to/from numpy array)
-    created_at = Column(DateTime, default=get_local_time)
-    
-    attendances = relationship("Attendance", back_populates="user")
+    def create(self, data):
+        response = requests.post(self.base_url, headers=HEADERS, json=data)
+        return response.json()
 
-class Attendance(Base):
-    __tablename__ = "attendances"
+    def get(self, object_id):
+        response = requests.get(f"{self.base_url}/{object_id}", headers=HEADERS)
+        return response.json()
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, ForeignKey("users.user_id"))
-    timestamp = Column(DateTime, default=get_local_time)
-    confidence = Column(Float)
-    is_late = Column(Boolean, default=False)
-    exit_time = Column(DateTime, nullable=True)
-    is_early_exit = Column(Boolean, default=False)
+    def update(self, object_id, data):
+        response = requests.put(f"{self.base_url}/{object_id}", headers=HEADERS, json=data)
+        return response.json()
 
-    user = relationship("User", back_populates="attendances")
-    early_exit_reasons = relationship("EarlyExitReason", back_populates="attendance")
+    def delete(self, object_id):
+        response = requests.delete(f"{self.base_url}/{object_id}", headers=HEADERS)
+        return response.json()
 
-class OfficeTiming(Base):
-    __tablename__ = "office_timings"
+    def query(self, where=None, order=None, limit=None):
+        params = {}
+        if where:
+            params["where"] = where
+        if order:
+            params["order"] = order
+        if limit:
+            params["limit"] = limit
+            
+        response = requests.get(self.base_url, headers=HEADERS, params=params)
+        data = response.json()
+        return data.get("results", [])
 
-    id = Column(Integer, primary_key=True, index=True)
-    login_time = Column(DateTime)  # Expected login time
-    logout_time = Column(DateTime)  # Expected logout time
-    created_at = Column(DateTime, default=get_local_time)
-    updated_at = Column(DateTime, default=get_local_time, onupdate=get_local_time)
+class Employee(BaseModel):
+    def __init__(self):
+        super().__init__("Employee")
+        self.created_at = get_local_time()
 
-class EarlyExitReason(Base):
-    __tablename__ = "early_exit_reasons"
+class Attendance(BaseModel):
+    def __init__(self):
+        super().__init__("Attendance")
+        self.timestamp = get_local_time()
+        self.is_late = False
+        self.is_early_exit = False
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, ForeignKey("users.user_id"))
-    attendance_id = Column(Integer, ForeignKey("attendances.id"))
-    reason = Column(String)
-    timestamp = Column(DateTime, default=get_local_time)
-    
-    user = relationship("User")
-    attendance = relationship("Attendance", back_populates="early_exit_reasons")
+class OfficeTiming(BaseModel):
+    def __init__(self):
+        super().__init__("OfficeTiming")
+        self.created_at = get_local_time()
+        self.updated_at = get_local_time()
 
-class TimezoneConfig(Base):
-    __tablename__ = "timezone_config"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    timezone_name = Column(String, nullable=False, default='Asia/Kolkata')
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)) 
+class EarlyExitReason(BaseModel):
+    def __init__(self):
+        super().__init__("EarlyExitReason")
+        self.timestamp = get_local_time()
+
+class TimezoneConfig(BaseModel):
+    def __init__(self):
+        super().__init__("TimezoneConfig")
+        self.timezone_name = 'Asia/Kolkata'
+        self.timezone_offset = '+05:30'
+        self.created_at = get_local_time()
+        self.updated_at = get_local_time()
+
+class Shift(BaseModel):
+    def __init__(self):
+        super().__init__("Shift")
+        self.created_at = get_local_time()
+        self.updated_at = get_local_time() 

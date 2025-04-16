@@ -227,8 +227,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
                     client_pending_tasks[client_id] += 1
 
-                # Get queues
-                processing_results_queue, websocket_responses_queue = get_queues()
+                # Get queues for this client
+                queues = get_queues()
+                if client_id not in queues:
+                    queues[client_id] = asyncio.Queue()
 
                 # Process image for face recognition
                 entry_type = data.get("entry_type", "entry")
@@ -249,6 +251,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Add callback for when the future completes
                 future.add_done_callback(
                     lambda f: handle_future_completion(f, client_id))
+
+                # Start processing queue for this client if not already running
+                if not any(task.get_name() == f"queue_processor_{client_id}" 
+                         for task in asyncio.all_tasks()):
+                    asyncio.create_task(
+                        process_queue(),
+                        name=f"queue_processor_{client_id}"
+                    )
 
                 # Start ping task if not already running
                 if not any(task.get_name() == f"ping_{client_id}" 

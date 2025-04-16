@@ -1190,3 +1190,50 @@ def get_early_exit_reasons(db: Session = Depends(get_db)):
         }
         for reason in reasons
     ]
+
+def initialize_back4app():
+    """Initialize Back4App database with default data"""
+    logger.info("Initializing Back4App database...")
+
+    # Check and create default office timings if not exists
+    office_timings = query("OfficeTiming", limit=1)
+    if not office_timings:
+        create("OfficeTiming", {
+            "login_time": "09:00",
+            "logout_time": "18:00",
+            "created_at": get_local_time().isoformat(),
+            "updated_at": get_local_time().isoformat()
+        })
+        logger.info("Created default office timings")
+
+    # Check and create default timezone config if not exists
+    timezone_config = query("TimezoneConfig", limit=1)
+    if not timezone_config:
+        create("TimezoneConfig", {
+            "timezone_name": "Asia/Kolkata",
+            "timezone_offset": "+05:30",
+            "created_at": get_local_time().isoformat(),
+            "updated_at": get_local_time().isoformat()
+        })
+        logger.info("Created default timezone configuration")
+
+    # Verify all classes exist
+    classes = ["User", "Attendance", "OfficeTiming", "EarlyExitReason", "TimezoneConfig"]
+    logger.info("Available classes in Back4App:")
+    for class_name in classes:
+        try:
+            # Try to query each class to verify it exists
+            query(class_name, limit=1)
+            logger.info(f"- {class_name}")
+        except Exception as e:
+            logger.error(f"Error accessing {class_name}: {str(e)}")
+
+    logger.info("Database initialization completed!")
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the application on startup"""
+    initialize_back4app()
+    # Start the WebSocket response processing task
+    asyncio.create_task(process_websocket_responses())
+    logger.info("Application startup completed")

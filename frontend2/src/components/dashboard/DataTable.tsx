@@ -10,7 +10,7 @@ interface DataTableProps<T> {
   onPaginationModelChange: (model: GridPaginationModel) => void;
 }
 
-export function DataTable<T extends { id?: number | string; user_id?: string }>({
+export function DataTable<T extends { objectId?: string; id?: number | string; user_id?: string }>({
   rows,
   columns,
   loading,
@@ -27,7 +27,7 @@ export function DataTable<T extends { id?: number | string; user_id?: string }>(
         <DataGrid
           rows={rows}
           columns={columns}
-          getRowId={(row) => row.id || row.user_id}
+          getRowId={(row) => row.objectId || row.id || row.user_id}
           paginationModel={paginationModel}
           onPaginationModelChange={onPaginationModelChange}
           pageSizeOptions={[10, 25, 50]}

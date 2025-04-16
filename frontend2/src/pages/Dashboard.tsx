@@ -43,7 +43,7 @@ export default function Dashboard() {
 
   const attendanceColumns: GridColDef[] = [
     { field: 'id', headerName: 'ID', width: 120 },
-    { field: 'user_id', headerName: 'User ID', width: 120 },
+    { field: 'user_id', headerName: 'Employee ID', width: 120 },
     { field: 'name', headerName: 'Name', width: 120, },
     { field: 'entry_time', headerName: 'Entry Time', width: 120, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
     { field: 'exit_time', headerName: 'Exit Time', width: 120, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
@@ -89,16 +89,47 @@ export default function Dashboard() {
     },
   ];
 
-  const userColumns: GridColDef[] = [
+  const employeeColumns: GridColDef[] = [
     {
-      field: 'user_id',
-      headerName: 'User ID',
+      field: 'employee_id',
+      headerName: 'Employee ID',
       width: 150,
     },
     {
       field: 'name',
       headerName: 'Name',
       width: 200,
+    },
+    {
+      field: 'department',
+      headerName: 'Department',
+      width: 150,
+    },
+    {
+      field: 'position',
+      headerName: 'Position',
+      width: 150,
+    },
+    {
+      field: 'shift',
+      headerName: 'Shift',
+      width: 200,
+      valueGetter: (params) => {
+        const shift = params.row.shift;
+        return shift ? `${shift.name} (${shift.login_time} - ${shift.logout_time})` : 'Not Assigned';
+      }
+    },
+    {
+      field: 'status',
+      headerName: 'Status',
+      width: 120,
+      renderCell: (params) => (
+        <Chip 
+          label={params.value} 
+          color={params.value === 'active' ? 'success' : 'error'} 
+          size="small"
+        />
+      )
     },
     {
       field: 'created_at',
@@ -141,7 +172,7 @@ export default function Dashboard() {
           <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
             <Tabs value={tabValue} onChange={handleTabChange}>
               <Tab label="Attendance Records" />
-              <Tab label="Users" />
+              <Tab label="Employees" />
             </Tabs>
           </Box>
 
@@ -161,7 +192,7 @@ export default function Dashboard() {
             <Box sx={{ p: 2 }}>
               <DataTable<User>
                 rows={users}
-                columns={userColumns}
+                columns={employeeColumns}
                 loading={usersLoading}
                 paginationModel={paginationModel}
                 onPaginationModelChange={setPaginationModel}
@@ -173,8 +204,8 @@ export default function Dashboard() {
 
       <DeleteDialog<User>
         dialog={userDeleteDialog}
-        title="Delete User"
-        getContentText={(user) => `Are you sure you want to delete user ${user.name}?`}
+        title="Delete Employee"
+        getContentText={(user) => `Are you sure you want to delete employee ${user.name}?`}
         onClose={() => setUserDeleteDialog(prev => ({ ...prev, open: false }))}
         onConfirm={handleUserDeleteConfirm}
       />
