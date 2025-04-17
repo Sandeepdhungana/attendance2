@@ -149,7 +149,7 @@ export default function Attendance() {
         open={earlyExitDialog.open}
         reason={earlyExitDialog.reason}
         onClose={() => setEarlyExitDialog({ open: false, reason: null })}
-        onSubmit={handleEarlyExitReason}
+        onSubmit={(reasonText, attendanceId) => handleEarlyExitReason(reasonText, attendanceId)}
       />
     </Box>
   );

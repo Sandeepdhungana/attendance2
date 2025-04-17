@@ -4,6 +4,7 @@ import concurrent.futures
 from typing import Dict, Any
 from fastapi import WebSocket
 from ..dependencies import get_active_connections, get_queues, get_client_tasks, get_pending_futures
+from ..utils.time_utils import get_local_time
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +14,10 @@ thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 async def _send_message_to_client(websocket: WebSocket, message: Dict[str, Any], client_id: str = None) -> bool:
     """Send message to a client and return success status"""
     try:
-        # Use the event loop to run the send operation in the thread pool
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(thread_pool, lambda: websocket.send_json(message))
+        # Use the event loop to run the send operation directly
+        await websocket.send_json(message)
         if client_id:
-            logger.debug(f"Successfully sent message to client {client_id}")
+            logger.debug(f"Successfully sent message to client {client_id}: {message.get('type', 'unknown')}")
         return True
     except Exception as e:
         if client_id:
@@ -130,6 +130,27 @@ async def process_websocket_responses():
                     continue
 
                 websocket = active_connections[client_id]
+                
+                # Handle real-time detection messages
+                if item.get("type") == "real_time_detection":
+                    logger.info(f"Sending real-time detection to client {client_id}: {item.get('name', 'Unknown')} - {item.get('confidence_str', '0%')}")
+                    await _send_message_to_client(websocket, item, client_id)
+                    websocket_responses_queue.task_done()
+                    continue
+                
+                # Handle notification messages
+                if item.get("type") == "notification":
+                    await _send_message_to_client(
+                        websocket,
+                        {
+                            "type": "notification",
+                            "notification_type": item.get("notification_type", "info"),
+                            "message": item.get("message", "")
+                        },
+                        client_id
+                    )
+                    websocket_responses_queue.task_done()
+                    continue
 
                 # Check if this is an error response
                 if "error" in item:
@@ -177,27 +198,32 @@ async def process_websocket_responses():
                     success = await _send_message_to_client(
                         websocket,
                         {
-                            "multiple_users": True,
-                            "users": processed_users
+                            "type": "detection_result",
+                            "multiple_users": len(processed_users) > 1,
+                            "users": processed_users,
+                            "timestamp": get_local_time().isoformat()
                         },
                         client_id
                     )
                     
-                    # Send notification for successful face detection
-                    if len(processed_users) == 1:
-                        user = processed_users[0]
-                        notification_msg = f"Face detected: {user.get('name', 'Unknown')} (ID: {user.get('employee_id', 'Unknown')})"
-                        await send_notification(websocket, notification_msg, "success", client_id)
-                    else:
-                        notification_msg = f"Multiple faces detected: {len(processed_users)} people identified"
-                        await send_notification(websocket, notification_msg, "success", client_id)
+                    # Send individual notifications for successful face detections
+                    # (This is a backup - real-time notifications should have already been sent in handle_future_completion)
+                    for user in processed_users:
+                        confidence = user.get('similarity', 0)
+                        # Format confidence as percentage
+                        confidence_str = f"{user.get('similarity_percent', confidence)}%"
+                        
+                        notification_msg = f"Detected: {user.get('name', 'Unknown')} (ID: {user.get('employee_id', 'Unknown')}) - Confidence: {confidence_str}"
+                        status_type = "success" if confidence >= 0.7 else "warning"  # Warning for lower confidence matches
+                        await send_notification(websocket, notification_msg, status_type, client_id)
                     
                     if not success and client_id in active_connections:
                         del active_connections[client_id]
 
                     # Add attendance updates to the queue for broadcasting
                     if attendance_updates:
-                        await broadcast_attendance_update(attendance_updates)
+                        for update in attendance_updates:
+                            await broadcast_attendance_update(update)
 
                 # Mark the task as done
                 websocket_responses_queue.task_done()
@@ -214,9 +240,74 @@ def handle_future_completion(future, client_id):
     client_pending_tasks, client_pending_tasks_lock = get_client_tasks()
     pending_futures = get_pending_futures()
     processing_results_queue, websocket_responses_queue = get_queues()
+    active_connections = get_active_connections()
     
     try:
         processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
+        
+        # Create real-time detection notifications to send via the response queue
+        real_time_notifications = []
+        
+        # For face detections with confidence
+        if processed_users and client_id in active_connections:
+            for user in processed_users:
+                # Get formatted confidence value
+                confidence = user.get('similarity', 0)
+                confidence_percent = user.get('similarity_percent', None)
+                
+                if confidence_percent is None:
+                    # Calculate percentage if not already present
+                    confidence_percent = round(confidence * 100, 1) if isinstance(confidence, float) else confidence
+                
+                confidence_str = f"{confidence_percent}%"
+                
+                # Create real-time detection notification
+                real_time_detection = {
+                    "type": "real_time_detection",
+                    "name": user.get('name', 'Unknown'),
+                    "employee_id": user.get('employee_id', 'Unknown'),
+                    "confidence": confidence,
+                    "confidence_percent": confidence_percent,
+                    "confidence_str": confidence_str,
+                    "message": user.get('message', ''),
+                    "timestamp": get_local_time().isoformat()
+                }
+                
+                # Add to notifications to be queued
+                real_time_notifications.append(real_time_detection)
+                
+                logger.info(f"Created real-time detection for {user.get('name', 'Unknown')} ({user.get('employee_id', 'Unknown')}) - Confidence: {confidence_str}")
+                
+                # Also add user-friendly notification
+                notification_msg = f"Detected: {user.get('name', 'Unknown')} (ID: {user.get('employee_id', 'Unknown')}) - Confidence: {confidence_str}"
+                status_type = "success" if confidence >= 0.7 else "warning"  # Warning for lower confidence
+                
+                # Queue notification message
+                websocket_responses_queue.put({
+                    "client_id": client_id,
+                    "type": "notification",
+                    "notification_type": status_type,
+                    "message": notification_msg
+                })
+        
+        # Add no face/no matching users notifications if needed
+        elif client_id in active_connections:
+            if no_face_count > 0:
+                # No face detected notification
+                websocket_responses_queue.put({
+                    "client_id": client_id,
+                    "type": "notification",
+                    "notification_type": "warning",
+                    "message": "No face detected in image"
+                })
+            else:
+                # No matching users found notification
+                websocket_responses_queue.put({
+                    "client_id": client_id,
+                    "type": "notification",
+                    "notification_type": "warning",
+                    "message": "No matching users found"
+                })
         
         # Add objectId and id to attendance updates if missing
         if attendance_updates:
@@ -225,11 +316,6 @@ def handle_future_completion(future, client_id):
                     update["objectId"] = update["attendance_id"]
                 if "id" not in update and "employee_id" in update:
                     update["id"] = update["employee_id"]
-
-        # Decrement pending tasks counter
-        with client_pending_tasks_lock:
-            if client_id in client_pending_tasks:
-                client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
 
         # Put the results in the websocket responses queue
         websocket_responses_queue.put({
@@ -240,6 +326,14 @@ def handle_future_completion(future, client_id):
             "no_face_count": no_face_count
         })
         
+        # Queue each real-time detection separately
+        for detection in real_time_notifications:
+            logger.info(f"Queuing real-time detection for client {client_id}: {detection.get('name')} - {detection.get('confidence_str')}")
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                **detection
+            })
+        
         # Also put attendance updates in the processing results queue for broadcasting
         if attendance_updates:
             processing_results_queue.put({
@@ -248,22 +342,35 @@ def handle_future_completion(future, client_id):
             })
             
     except Exception as e:
-        logger.error(f"Error handling future completion: {str(e)}")
-        # Decrement pending tasks counter even on error
+        logger.error(f"Error handling future completion for client {client_id}: {str(e)}")
+        # Put error message in the websocket responses queue
+        websocket_responses_queue.put({
+            "client_id": client_id,
+            "error": str(e),
+            "processed_users": [],
+            "attendance_updates": [],
+            "no_face_count": 0
+        })
+        
+        # Also send immediate error notification via queue
+        if client_id in active_connections:
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "type": "notification",
+                "notification_type": "error",
+                "message": f"Error processing image: {str(e)}"
+            })
+            
+    finally:
+        # Always decrement pending tasks counter, regardless of success or failure
         with client_pending_tasks_lock:
             if client_id in client_pending_tasks:
                 client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
-        # Put error in the queue
-        websocket_responses_queue.put({
-            "client_id": client_id,
-            "error": str(e)
-        })
-    finally:
-        # Clean up the future from pending_futures
-        for key, value in list(pending_futures.items()):
-            if value == client_id:
-                del pending_futures[key]
-                break
+                logger.info(f"Decreased pending tasks for client {client_id} to {client_pending_tasks[client_id]}")
+        
+        # Remove future from pending futures
+        if future in pending_futures:
+            del pending_futures[future]
 
 # Function to gracefully shutdown the thread pool
 async def shutdown_thread_pool():

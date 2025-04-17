@@ -85,7 +85,13 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   const sendMessage = (message: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('Sending WebSocket message:', message.type || 'image data');
       wsRef.current.send(JSON.stringify(message));
+    } else {
+      console.warn('Cannot send message - WebSocket not connected. State:', 
+        wsRef.current ? 
+        ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][wsRef.current.readyState] : 
+        'null');
     }
   };
 

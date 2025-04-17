@@ -79,6 +79,8 @@ def initialize_back4app():
         "EarlyExitReason": {
             "employee_id": "String",
             "attendance_id": "String",
+            "attendance": "Pointer<Attendance>",
+            "employee": "Pointer<Employee>",
             "reason": "String",
             "created_at": "Date",
             "updated_at": "Date"

@@ -274,9 +274,10 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     return result
 
 def process_image_in_process(image_data: str, entry_type: str, client_id: str):
-    """Process image in a separate process"""
+    """Process image in a separate process - enhanced for real-time streaming with confidence information"""
     try:
-        # Remove data URL prefix if present
+        # image_data should already have the data URL prefix removed in the websocket endpoint
+        # But let's double-check
         if "," in image_data:
             image_data = image_data.split(",")[1]
 
@@ -288,21 +289,27 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if img is None:
+            logger.error(f"Failed to decode image for client {client_id}")
             return [], [], {}, 0
 
         # Get all face embeddings from the image
         face_recognition = get_face_recognition()
         face_embeddings = face_recognition.get_embeddings(img)
         if not face_embeddings:
+            logger.info(f"No faces detected in image from client {client_id}")
             return [], [], {}, 1
 
         # Get all employees from the database
         employees = db_query("Employee")
+        if not employees:
+            logger.warning("No employees found in database")
+            return [], [], {}, 0
 
         # Find matches for all detected faces
         matches = face_recognition.find_matches_for_embeddings(face_embeddings, employees)
 
         if not matches:
+            logger.info(f"No matching employees found for client {client_id}")
             return [], [], {}, 0
 
         # Process each matched employee
@@ -310,27 +317,45 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
         attendance_updates = []
         last_recognized_employees = {}
 
+        current_time = get_local_time()
+        
         for match in matches:
             employee = match['employee']
             similarity = match['similarity']
-
+            
+            # Format similarity as percentage for display
+            similarity_percent = round(similarity * 100, 1) if isinstance(similarity, float) else similarity
+            
+            logger.info(f"Detected employee {employee.get('name')} (ID: {employee.get('employee_id')}) with confidence {similarity_percent}%")
+            
             # Update last recognized employees
             last_recognized_employees[employee.get("employee_id")] = {
                 'employee': employee,
-                'similarity': similarity
+                'similarity': similarity,
+                'similarity_percent': similarity_percent,
+                'timestamp': current_time.isoformat()
             }
 
             # Process attendance using shared function
             result = process_attendance_for_employee(employee, similarity, entry_type)
             
             if result["processed_employee"]:
-                processed_employees.append(result["processed_employee"])
+                # Add additional data helpful for real-time display
+                processed_employee = result["processed_employee"]
+                processed_employee["similarity_percent"] = similarity_percent
+                processed_employee["detection_time"] = current_time.isoformat()
+                processed_employee["is_streaming"] = True
+                
+                processed_employees.append(processed_employee)
             
             if result["attendance_update"]:
+                # Add additional confidence information
+                result["attendance_update"]["confidence_percent"] = similarity_percent
+                result["attendance_update"]["detection_time"] = current_time.isoformat()
                 attendance_updates.append(result["attendance_update"])
 
         return processed_employees, attendance_updates, last_recognized_employees, 0
 
     except Exception as e:
-        logger.error(f"Error processing image: {str(e)}")
+        logger.error(f"Error processing image for client {client_id}: {str(e)}")
         return [], [], {}, 0 

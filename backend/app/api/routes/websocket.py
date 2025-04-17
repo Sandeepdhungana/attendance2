@@ -310,33 +310,68 @@ async def websocket_endpoint(websocket: WebSocket):
             elif "image" in data:
                 # Check if client has too many pending tasks
                 with client_pending_tasks_lock:
-                    if client_pending_tasks.get(client_id, 0) >= MAX_CONCURRENT_TASKS_PER_CLIENT:
+                    current_pending = client_pending_tasks.get(client_id, 0)
+                    if current_pending >= MAX_CONCURRENT_TASKS_PER_CLIENT:
                         await websocket.send_json({
-                            "status": "error",
-                            "message": "Server Busy with other images"
+                            "status": "queued",
+                            "message": f"Processing queue full ({current_pending} tasks). Please wait.",
+                            "timestamp": get_local_time().isoformat()
                         })
+                        # Don't continue with task submission if we're at capacity
                         continue
-                    client_pending_tasks[client_id] += 1
+                    client_pending_tasks[client_id] = current_pending + 1
+                    logger.info(f"Increased pending tasks for client {client_id} to {client_pending_tasks[client_id]}")
 
-           
-                entry_type = data.get("entry_type", "entry")
+                try:
+                    # Get streaming flag - assume it's real-time streaming if streaming key exists
+                    is_streaming = "streaming" in data and data.get("streaming") is True
+                    entry_type = data.get("entry_type", "entry")
+                    
+                    logger.info(f"Processing {'streaming' if is_streaming else 'regular'} image from client {client_id}")
 
-                # Submit image processing to process pool (CPU intensive task)
-                process_pool = get_process_pool()
-                future = process_pool.submit(
-                    process_image_in_process,
-                    data["image"],
-                    entry_type,
-                    client_id
-                )
+                    # Send confirmation that we received the image and are processing it
+                    await websocket.send_json({
+                        "status": "processing",
+                        "message": "Processing image...",
+                        "timestamp": get_local_time().isoformat(),
+                        "is_streaming": is_streaming
+                    })
 
-                # Store the future with client_id
-                pending_futures = get_pending_futures()
-                pending_futures[future] = client_id
+                    # Extract and preprocess the image data
+                    image_data = data["image"]
+                    # Remove data URL prefix if present
+                    if "," in image_data:
+                        image_data = image_data.split(",")[1]
 
-                # Add callback for when the future completes
-                future.add_done_callback(
-                    lambda f: handle_future_completion(f, client_id))
+                    # Submit image processing to process pool (CPU intensive task)
+                    process_pool = get_process_pool()
+                    future = process_pool.submit(
+                        process_image_in_process,
+                        image_data,
+                        entry_type,
+                        client_id
+                    )
+
+                    # Store the future with client_id
+                    pending_futures = get_pending_futures()
+                    pending_futures[future] = client_id
+
+                    # Add callback for when the future completes
+                    future.add_done_callback(
+                        lambda f: handle_future_completion(f, client_id))
+                
+                except Exception as e:
+                    logger.error(f"Error submitting image processing task: {str(e)}")
+                    # If there was an error submitting the task, decrement the counter
+                    with client_pending_tasks_lock:
+                        if client_id in client_pending_tasks:
+                            client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+                    
+                    # Send error response to client
+                    await websocket.send_json({
+                        "status": "error",
+                        "message": f"Error processing image: {str(e)}"
+                    })
 
             elif data.get("type") == "ping":
                 # Respond to ping
@@ -355,9 +390,18 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
     finally:
         # Clean up
-        if client_id in active_connections:
-            del active_connections[client_id]
+        active_connections.pop(client_id, None)
+        
+        # Clean up pending tasks
         with client_pending_tasks_lock:
             if client_id in client_pending_tasks:
+                logger.info(f"Cleaning up {client_pending_tasks[client_id]} pending tasks for client {client_id}")
                 del client_pending_tasks[client_id]
+        
+        # Clean up any pending futures for this client
+        pending_futures = get_pending_futures()
+        for future, future_client_id in list(pending_futures.items()):
+            if future_client_id == client_id:
+                del pending_futures[future]
+                
         logger.info(f"WebSocket connection {client_id} closed. Total connections: {len(active_connections)}") 

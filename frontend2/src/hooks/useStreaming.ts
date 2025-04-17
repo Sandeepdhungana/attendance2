@@ -17,15 +17,17 @@ export const useStreaming = (entryType: 'entry' | 'exit') => {
         
         const imageSrc = getScreenshot();
         if (imageSrc) {
+          console.log('Sending streaming frame with entry type:', entryType);
           sendMessage({ 
             image: imageSrc,
-            entry_type: entryType 
+            entry_type: entryType,
+            streaming: true
           });
         }
       };
       
       sendFrame();
-      streamIntervalRef.current = setInterval(sendFrame, 1000);
+      streamIntervalRef.current = setInterval(sendFrame, 2500);
     }
   }, [entryType, isConnected, sendMessage]);
 
@@ -62,7 +64,8 @@ export const useStreaming = (entryType: 'entry' | 'exit') => {
             const imageSrc = canvas.toDataURL('image/jpeg');
             sendMessage({ 
               image: imageSrc,
-              entry_type: entryType 
+              entry_type: entryType,
+              streaming: true
             });
           }
         }
@@ -80,7 +83,7 @@ export const useStreaming = (entryType: 'entry' | 'exit') => {
       }
       
       sendFrame();
-      streamIntervalRef.current = setInterval(sendFrame, 750);
+      streamIntervalRef.current = setInterval(sendFrame, 2500);
       
       return () => {
         if (videoRef.current) {
