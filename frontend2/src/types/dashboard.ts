@@ -12,7 +12,9 @@ export interface AttendanceRecord {
 }
 
 export interface User {
-  user_id: string;
+  user_id?: string;
+  employee_id: string;
+  objectId?: string;
   name: string;
   created_at: string;
 }

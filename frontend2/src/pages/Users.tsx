@@ -24,6 +24,7 @@ import { useWebSocket } from '../App';
 import { useNavigate } from 'react-router-dom';
 
 interface User {
+  objectId: string;
   employee_id: string;
   name: string;
   department: string;
@@ -97,9 +98,11 @@ export default function Users() {
     }
   };
 
-  const handleDeleteUser = async (userId: string) => {
+  const handleDeleteUser = async (user: User) => {
     try {
-      await api.delete(`/employees/${userId}`);
+      // Use objectId for deletion if available, otherwise fall back to employee_id
+      const deleteId = user.objectId || user.employee_id;
+      await api.delete(`/employees/${deleteId}`);
       fetchUsers();
     } catch (error) {
       setError('Failed to delete employee');
@@ -174,7 +177,7 @@ export default function Users() {
                       </Button>
                       <Button
                         color="error"
-                        onClick={() => handleDeleteUser(user.employee_id)}
+                        onClick={() => handleDeleteUser(user)}
                       >
                         Delete
                       </Button>

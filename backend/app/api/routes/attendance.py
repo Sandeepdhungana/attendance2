@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from typing import List, Dict, Any
 from app.database import query, create, delete
-from app.services.attendance import get_attendance_records, delete_attendance_record, process_attendance_for_employee
-from app.utils.processing import process_image_in_process
+from app.services.attendance import get_attendance_records, delete_attendance_record, get_employee_shift_info
+from app.utils.processing import process_image_in_process,process_attendance_for_employee
 from app.dependencies import get_process_pool, get_pending_futures, get_client_tasks, get_queues, get_face_recognition
 from app.utils.websocket import broadcast_attendance_update
 from app.utils.time_utils import get_local_time
@@ -253,19 +253,54 @@ def update_shift(shift_id: str, shift_data: ShiftUpdate):
 def delete_shift(shift_id: str):
     """Delete a shift"""
     try:
-        # Check if any employees are using this shift
-        employees = query("Employee", where={"shift": {"__type": "Pointer", "className": "Shift", "objectId": shift_id}})
-        if employees:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot delete shift as it is assigned to employees"
-            )
+        # Check if the shift exists first
+        shift_model = Shift()
+        shift_data = shift_model.get(shift_id)
         
-        shift = Shift()
-        shift.delete(shift_id)
-        return {"message": "Shift deleted successfully"}
+        if not shift_data:
+            logger.error(f"Shift not found with ID: {shift_id}")
+            raise HTTPException(status_code=404, detail="Shift not found")
+        
+        # Check if any employees are using this shift
+        try:
+            employees = query("Employee", where={"shift": {"__type": "Pointer", "className": "Shift", "objectId": shift_id}})
+            if employees and len(employees) > 0:
+                # Get the employee names for better error message
+                employee_names = [e.get("name", f"ID: {e.get('employee_id', 'Unknown')}") for e in employees if isinstance(e, dict)]
+                employee_list = ", ".join(employee_names[:5])
+                if len(employee_names) > 5:
+                    employee_list += f" and {len(employee_names) - 5} more"
+                
+                logger.warning(f"Cannot delete shift {shift_id} as it is assigned to employees: {employee_list}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot delete shift as it is assigned to employees: {employee_list}"
+                )
+        except Exception as query_err:
+            # If we can't query employees, log the error but continue with deletion
+            logger.error(f"Error checking employees for shift {shift_id}: {str(query_err)}")
+        
+        logger.info(f"Deleting shift with ID: {shift_id}")
+        
+        # Try to delete the shift
+        try:
+            result = shift_model.delete(shift_id)
+            
+            # Check if there was an error in the response
+            if isinstance(result, dict) and result.get("error"):
+                logger.error(f"Error response from API when deleting shift {shift_id}: {result}")
+                raise HTTPException(status_code=500, detail=f"API Error: {result.get('error')}")
+                
+            logger.info(f"Shift deleted successfully: ID {shift_id}")
+            return {"message": "Shift deleted successfully"}
+        except Exception as delete_err:
+            logger.error(f"Error during shift deletion API call: {str(delete_err)}")
+            raise HTTPException(status_code=500, detail=f"Error deleting shift: {str(delete_err)}")
+    except HTTPException:
+        # Re-raise HTTPExceptions to preserve status code and details
+        raise
     except Exception as e:
-        logger.error(f"Error deleting shift: {str(e)}")
+        logger.error(f"Error in delete_shift: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/register")
@@ -335,4 +370,14 @@ async def register_employee(
         }
     except Exception as e:
         logger.error(f"Error registering employee: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/employees/{employee_id}/shift")
+def get_employee_shift(employee_id: str):
+    """Get shift information for a specific employee"""
+    try:
+        shift_info = get_employee_shift_info(employee_id)
+        return shift_info
+    except Exception as e:
+        logger.error(f"Error getting employee shift: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e)) 

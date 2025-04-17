@@ -9,6 +9,7 @@ from ..utils.time_utils import get_local_date, get_local_time, convert_to_local_
 from datetime import datetime, timedelta
 from ..database import query as db_query
 from ..database import create, update
+from ..services.sendpulse_service import send_message_by_phone
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,7 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         #     new_attendance_data["late_message"] = late_message
         
         create("Attendance", new_attendance_data)
+        send_message_by_phone(bot_id="67ff97f2dccc60523807cffd", phone=971524472456, message_text="Welcome to Zainlee, Your attendance has been marked")
 
         # Create message for on-time arrival
         message = "Entry marked successfully"
@@ -236,6 +238,10 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                                             datetime.min.time().replace(hour=logout_time_hours, 
                                                                         minute=logout_time_minutes))
                 logout_time = convert_to_local_time(logout_time)
+                logger.info(f"Logout time: {logout_time}")
+                logger.info(f"Current time: {current_time}")
+                logger.info(f"Is early exit: {is_early_exit}")
+                logger.info(f"Check logout time {current_time < logout_time}")
                 
                 if current_time < logout_time:
                     is_early_exit = True

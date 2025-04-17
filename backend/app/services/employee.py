@@ -36,13 +36,36 @@ def get_employees() -> List[Dict[str, Any]]:
     
     return formatted_employees
 
-def delete_employee(employee_id: str) -> Dict[str, str]:
+def delete_employee(employee_id: str, object_id: str = None) -> Dict[str, str]:
     """Delete an employee"""
     employee_model = Employee()
-    # First find the employee by employee_id
-    employees = employee_model.query(where={"employee_id": employee_id}, limit=1)
-    if not employees:
-        raise ValueError(f"Employee with ID {employee_id} not found")
     
-    employee_model.delete(employees[0]["objectId"])
-    return {"message": f"Employee {employee_id} deleted successfully"} 
+    try:
+        if object_id:
+            # If objectId is provided, check if employee exists first
+            employee_obj = employee_model.get(object_id)
+            if not employee_obj:
+                raise ValueError(f"Employee with objectId {object_id} not found")
+                
+            # Delete the employee
+            result = employee_model.delete(object_id)
+            if "error" in result:
+                raise ValueError(f"Error deleting employee: {result.get('error')}")
+                
+            return {"message": f"Employee deleted successfully", "object_id": object_id}
+        
+        # If only employee_id is provided, find the employee by employee_id (backward compatibility)
+        employees = employee_model.query(where={"employee_id": employee_id}, limit=1)
+        if not employees:
+            raise ValueError(f"Employee with ID {employee_id} not found")
+        
+        object_id = employees[0]["objectId"]
+        result = employee_model.delete(object_id)
+        if "error" in result:
+            raise ValueError(f"Error deleting employee: {result.get('error')}")
+            
+        return {"message": f"Employee {employee_id} deleted successfully", "object_id": object_id}
+    except Exception as e:
+        import logging
+        logging.error(f"Error in delete_employee: {str(e)}", exc_info=True)
+        raise 

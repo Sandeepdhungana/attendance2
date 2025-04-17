@@ -92,33 +92,63 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         minutes_late = None
         current_time = get_local_time()
         
-        # Get office timings
-        office_timing = db_query("OfficeTiming", limit=1)
-        office_timing = office_timing[0] if office_timing else None
+        # Get employee's shift information
+        employee_shift = employee.get("shift", None)
         
         login_time = None
         grace_period_end = None
         
-        if office_timing and office_timing.get("login_time"):
-            # Parse login_time from string
-            login_time_str = office_timing.get("login_time")
-            login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
+        if employee_shift:
+            # Get the shift details
+            shift_id = employee_shift.get("objectId")
+            shift = db_query("Shift", where={"objectId": shift_id}, limit=1)
+            shift = shift[0] if shift else None
             
-            # Convert login_time to timezone-aware datetime for today
-            login_time = datetime.combine(today, 
-                                          datetime.min.time().replace(hour=login_time_hours, 
-                                                                      minute=login_time_minutes))
-            login_time = convert_to_local_time(login_time)
+            if shift and shift.get("login_time"):
+                # Parse login_time from string
+                login_time_str = shift.get("login_time")
+                login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
+                
+                # Convert login_time to timezone-aware datetime for today
+                login_time = datetime.combine(today, 
+                                            datetime.min.time().replace(hour=login_time_hours, 
+                                                                        minute=login_time_minutes))
+                login_time = convert_to_local_time(login_time)
+                
+                # Calculate the grace period end time (1 hour after login time)
+                grace_period_end = login_time + timedelta(hours=1)
+                
+                # Mark as late if entry is after grace period
+                if current_time > grace_period_end:
+                    is_late = True
+                    time_diff = current_time - login_time
+                    minutes_late = int(time_diff.total_seconds() / 60)
+                    late_message = f"Late arrival: {current_time.strftime('%H:%M')} ({minutes_late} minutes late, Shift time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
+        else:
+            # Fallback to default office timing if no shift is assigned
+            office_timing = db_query("OfficeTiming", limit=1)
+            office_timing = office_timing[0] if office_timing else None
             
-            # Calculate the grace period end time (1 hour after login time)
-            grace_period_end = login_time + timedelta(hours=1)
-            
-            # Mark as late if entry is after grace period
-            if current_time > grace_period_end:
-                is_late = True
-                time_diff = current_time - login_time
-                minutes_late = int(time_diff.total_seconds() / 60)
-                late_message = f"Late arrival: {current_time.strftime('%H:%M')} ({minutes_late} minutes late, Office time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
+            if office_timing and office_timing.get("login_time"):
+                # Parse login_time from string
+                login_time_str = office_timing.get("login_time")
+                login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
+                
+                # Convert login_time to timezone-aware datetime for today
+                login_time = datetime.combine(today, 
+                                            datetime.min.time().replace(hour=login_time_hours, 
+                                                                        minute=login_time_minutes))
+                login_time = convert_to_local_time(login_time)
+                
+                # Calculate the grace period end time (1 hour after login time)
+                grace_period_end = login_time + timedelta(hours=1)
+                
+                # Mark as late if entry is after grace period
+                if current_time > grace_period_end:
+                    is_late = True
+                    time_diff = current_time - login_time
+                    minutes_late = int(time_diff.total_seconds() / 60)
+                    late_message = f"Late arrival: {current_time.strftime('%H:%M')} ({minutes_late} minutes late, Office time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
 
         # Create new attendance record
         new_attendance = create("Attendance", {
@@ -141,7 +171,8 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         if is_late:
             message += f" - {late_message}"
         elif login_time and grace_period_end:
-            message += f" - On time (Office time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
+            timing_type = "Shift" if employee_shift else "Office"
+            message += f" - On time ({timing_type} time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
 
         attendance_data = {
             "action": "entry",
@@ -190,27 +221,55 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         early_exit_message = None
         current_time = get_local_time()
         
-        # Get office timings
-        office_timing = db_query("OfficeTiming", limit=1)
-        office_timing = office_timing[0] if office_timing else None
+        # Get employee's shift information
+        employee_shift = employee.get("shift", None)
         
-        if office_timing and office_timing.get("logout_time"):
-            # Parse logout_time from string
-            logout_time_str = office_timing.get("logout_time")
-            logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
+        if employee_shift:
+            # Get the shift details
+            shift_id = employee_shift.get("objectId")
+            shift = db_query("Shift", where={"objectId": shift_id}, limit=1)
+            shift = shift[0] if shift else None
             
-            # Convert logout_time to timezone-aware datetime for today
-            logout_time = datetime.combine(today, 
-                                         datetime.min.time().replace(hour=logout_time_hours, 
-                                                                    minute=logout_time_minutes))
-            logout_time = convert_to_local_time(logout_time)
+            if shift and shift.get("logout_time"):
+                # Parse logout_time from string
+                logout_time_str = shift.get("logout_time")
+                logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
+                
+                # Convert logout_time to timezone-aware datetime for today
+                logout_time = datetime.combine(today, 
+                                            datetime.min.time().replace(hour=logout_time_hours, 
+                                                                        minute=logout_time_minutes))
+                logout_time = convert_to_local_time(logout_time)
+                
+                if current_time < logout_time:
+                    is_early_exit = True
+                    early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Shift time: {logout_time.strftime('%H:%M')})"
+        else:
+            # Fallback to default office timing if no shift is assigned
+            office_timing = db_query("OfficeTiming", limit=1)
+            office_timing = office_timing[0] if office_timing else None
             
-            if current_time < logout_time:
-                is_early_exit = True
-                early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Office time: {logout_time.strftime('%H:%M')})"
+            if office_timing and office_timing.get("logout_time"):
+                # Parse logout_time from string
+                logout_time_str = office_timing.get("logout_time")
+                logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
+                
+                # Convert logout_time to timezone-aware datetime for today
+                logout_time = datetime.combine(today, 
+                                            datetime.min.time().replace(hour=logout_time_hours, 
+                                                                        minute=logout_time_minutes))
+                logout_time = convert_to_local_time(logout_time)
+                logger.info(f"Logout time: {logout_time}")
+                logger.info(f"Current time: {current_time}")
+                logger.info(f"Is early exit: {is_early_exit}")
+                
+                
+                if current_time < logout_time:
+                    is_early_exit = True
+                    early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Office time: {logout_time.strftime('%H:%M')})"
 
         # Update the existing attendance record with exit time
-        updated_attendance = update("Attendance", existing_attendance.get("objectId"), {
+        update("Attendance", existing_attendance.get("objectId"), {
             "exit_time": {
                 "__type": "Date",
                 "iso": current_time.isoformat()
@@ -264,6 +323,62 @@ def get_office_timings() -> Dict[str, Any]:
         "logout_time": timing.get("logout_time"),
         "created_at": timing.get("createdAt"),
         "updated_at": timing.get("updatedAt")
+    }
+
+def get_employee_shift_info(employee_id: str) -> Dict[str, Any]:
+    """Get shift information for a specific employee"""
+    # Get the employee first
+    employee = db_query("Employee", where={"employee_id": employee_id}, limit=1)
+    if not employee:
+        return {
+            "employee_id": employee_id,
+            "has_shift": False,
+            "shift_info": None,
+            "using_default": True,
+            "timing_info": get_office_timings()
+        }
+    
+    employee = employee[0]
+    employee_shift = employee.get("shift")
+    
+    # If the employee has no shift, return default office timings
+    if not employee_shift or not employee_shift.get("objectId"):
+        return {
+            "employee_id": employee_id,
+            "has_shift": False,
+            "shift_info": None,
+            "using_default": True,
+            "timing_info": get_office_timings()
+        }
+    
+    # Get the shift details
+    shift_id = employee_shift.get("objectId")
+    shift = db_query("Shift", where={"objectId": shift_id}, limit=1)
+    
+    if not shift:
+        return {
+            "employee_id": employee_id,
+            "has_shift": False,
+            "shift_info": None,
+            "using_default": True,
+            "timing_info": get_office_timings()
+        }
+    
+    shift = shift[0]
+    return {
+        "employee_id": employee_id,
+        "has_shift": True,
+        "shift_info": {
+            "objectId": shift.get("objectId"),
+            "name": shift.get("name"),
+            "login_time": shift.get("login_time"),
+            "logout_time": shift.get("logout_time")
+        },
+        "using_default": False,
+        "timing_info": {
+            "login_time": shift.get("login_time"),
+            "logout_time": shift.get("logout_time")
+        }
     }
 
 def set_office_timings(login_time: str, logout_time: str) -> Dict[str, Any]:

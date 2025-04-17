@@ -135,12 +135,21 @@ export function useDashboard() {
   const handleUserDeleteConfirm = async () => {
     if (userDeleteDialog.item) {
       try {
-        await api.delete(`/employee/${userDeleteDialog.item.user_id}`);
-        setUsers(users.filter(u => u.user_id !== userDeleteDialog.item?.user_id));
+        // Use objectId for deletion if available, otherwise fall back to employee_id
+        const deleteId = userDeleteDialog.item.objectId || userDeleteDialog.item.employee_id;
+        console.log(`Deleting user with ID: ${deleteId}`);
+        
+        await api.delete(`/employees/${deleteId}`);
+        
+        // Filter users using employee_id (the primary identifier)
+        const identifierToFilter = userDeleteDialog.item.employee_id;
+        setUsers(users.filter(u => u.employee_id !== identifierToFilter));
+        
         setUserDeleteDialog({ open: false, item: null, loading: false });
         // Refresh data
         fetchData();
       } catch (err) {
+        console.error('Error deleting user:', err);
         setError(err instanceof Error ? err.message : 'Failed to delete user');
       }
     }

@@ -21,5 +21,10 @@ BACK4APP_REST_API_KEY = "6dALgL7Y4M8qwqAZewdQZBGRKP2DdD9TgXL64qTa"
 BACK4APP_MASTER_KEY = "78CsqfmbtuWHclu8gnJuuip0VcgCnkeRboZz8m1x"
 BACK4APP_SERVER_URL = "https://parseapi.back4app.com"
 
+
+SENDPULSE_API_URL = "https://api.sendpulse.com"
+SENDPULSE_CLIENT_ID = "e6166297e5fa0df74a742b1f8d6c0fa1"
+SENDPULSE_CLIENT_SECRET = "4ebf9af5bc18d5eb74eb6309f99226f7"
+
 # Face recognition settings
 FACE_RECOGNITION_THRESHOLD = 0.6  # Minimum similarity score for face recognition 

@@ -88,11 +88,34 @@ async def update_employee_route(
 def delete_employee_route(employee_id: str):
     """Delete an employee"""
     try:
-        result = delete_employee(employee_id)
+        # Check if the employee_id is an objectId format (Parse server format)
+        is_object_id = len(employee_id) >= 10 and "-" not in employee_id and not employee_id.isdigit()
+        
+        logger.info(f"Deleting employee: {employee_id}, is_object_id: {is_object_id}")
+        
+        if is_object_id:
+            # Delete using objectId
+            result = delete_employee(employee_id="", object_id=employee_id)
+        else:
+            # Delete by employee_id
+            result = delete_employee(employee_id=employee_id)
+        
+        # Get the identifier for broadcasting - use the one that was in the result message
+        broadcast_id = employee_id
+        if "Employee deleted successfully" in result.get("message", ""):
+            # When we delete by objectId, we don't know the employee_id
+            broadcast_id = "unknown"
+        elif "Employee " in result.get("message", ""):
+            # When we delete by employee_id, the message contains it
+            parts = result.get("message", "").split("Employee ")
+            if len(parts) > 1:
+                broadcast_id = parts[1].split(" ")[0]
+        
         # Broadcast user deletion
         attendance_update = {
             "action": "delete_user",
-            "user_id": employee_id,
+            "user_id": broadcast_id,
+            "object_id": result.get("object_id", ""),
             "timestamp": get_local_time().isoformat()
         }
         processing_results_queue, _ = get_queues()
@@ -100,8 +123,10 @@ def delete_employee_route(employee_id: str):
             "type": "attendance_update",
             "data": [attendance_update]
         })
+        
         return result
     except Exception as e:
+        logger.error(f"Error deleting employee: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=400,
             detail={

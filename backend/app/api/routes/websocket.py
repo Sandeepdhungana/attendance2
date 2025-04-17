@@ -94,6 +94,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         employees = query("Employee")
                         
                     return [{
+                        "objectId": employee["objectId"],  # Include objectId
                         "employee_id": employee["employee_id"],
                         "name": employee["name"],
                         "created_at": employee.get("createdAt", "")
@@ -155,7 +156,45 @@ async def websocket_endpoint(websocket: WebSocket):
             elif data.get("type") == "delete_employee":
                 # Delete employee operation
                 employee_id = data.get("employee_id")
-                if employee_id:
+                object_id = data.get("object_id")  # Add support for object_id
+                
+                if object_id:
+                    # Delete directly by objectId
+                    try:
+                        # Get employee info before deletion
+                        employee = query("Employee", where={"objectId": object_id}, limit=1)
+                        if employee:
+                            employee = employee[0]
+                            employee_id = employee.get("employee_id")
+                            
+                            # Delete the employee
+                            delete("Employee", object_id)
+                            
+                            # Broadcast employee deletion
+                            await broadcast_attendance_update({
+                                "action": "delete_employee",
+                                "employee_id": employee_id,
+                                "object_id": object_id,
+                                "name": employee.get("name", "Unknown"),
+                                "timestamp": get_local_time().isoformat()
+                            })
+                            
+                            await websocket.send_json({
+                                "status": "success",
+                                "message": "Employee deleted successfully"
+                            })
+                        else:
+                            await websocket.send_json({
+                                "status": "error",
+                                "message": "Employee not found with provided objectId"
+                            })
+                    except Exception as e:
+                        logger.error(f"Error deleting employee by objectId: {str(e)}")
+                        await websocket.send_json({
+                            "status": "error",
+                            "message": f"Error deleting employee: {str(e)}"
+                        })
+                elif employee_id:
                     # Define delete employee operation for thread pool
                     def delete_employee_record():
                         # Get employee info before deletion
@@ -176,6 +215,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         await broadcast_attendance_update({
                             "action": "delete_employee",
                             "employee_id": employee_id,
+                            "object_id": employee.get("objectId", ""),
                             "name": employee["name"],
                             "timestamp": get_local_time().isoformat()
                         })
@@ -188,6 +228,11 @@ async def websocket_endpoint(websocket: WebSocket):
                             "status": "error",
                             "message": "Employee not found"
                         })
+                else:
+                    await websocket.send_json({
+                        "status": "error",
+                        "message": "No employee_id or object_id provided for deletion"
+                    })
 
             elif data.get("type") == "register_employee":
                 # Register new employee

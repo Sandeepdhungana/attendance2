@@ -35,16 +35,31 @@ class BaseModel:
         return response.json()
 
     def get(self, object_id):
-        response = requests.get(f"{self.base_url}/{object_id}", headers=HEADERS)
-        return response.json()
+        try:
+            response = requests.get(f"{self.base_url}/{object_id}", headers=HEADERS)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()  # Raise exception for other HTTP errors
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting {self.class_name} with objectId {object_id}: {str(e)}")
+            return None
 
     def update(self, object_id, data):
         response = requests.put(f"{self.base_url}/{object_id}", headers=HEADERS, json=data)
         return response.json()
 
     def delete(self, object_id):
-        response = requests.delete(f"{self.base_url}/{object_id}", headers=HEADERS)
-        return response.json()
+        try:
+            response = requests.delete(f"{self.base_url}/{object_id}", headers=HEADERS)
+            if response.status_code == 404:
+                print(f"Object {self.class_name} with ID {object_id} not found for deletion.")
+                return {"error": "Object not found"}
+            response.raise_for_status()  # Raise exception for other HTTP errors
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error deleting {self.class_name} with objectId {object_id}: {str(e)}")
+            raise
 
     def query(self, where=None, order=None, limit=None):
         params = {}
