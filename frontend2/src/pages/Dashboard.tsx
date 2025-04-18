@@ -10,10 +10,14 @@ import {
   Tab,
   Chip,
   IconButton,
+  useTheme,
+  alpha,
+  Paper,
+  Divider,
 } from '@mui/material';
 import { GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import { format } from 'date-fns';
-import { Delete as DeleteIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, CalendarToday, Group } from '@mui/icons-material';
 import { useDashboard } from '../hooks/useDashboard';
 import { TabPanel } from '../components/dashboard/TabPanel';
 import { DeleteDialog } from '../components/dashboard/DeleteDialog';
@@ -21,6 +25,7 @@ import { DataTable } from '../components/dashboard/DataTable';
 import { AttendanceRecord, User } from '../types/dashboard';
 
 export default function Dashboard() {
+  const theme = useTheme();
   const {
     records,
     users,
@@ -44,8 +49,18 @@ export default function Dashboard() {
   const attendanceColumns: GridColDef[] = [
     { field: 'employee_id', headerName: 'Employee ID', width: 150 },
     { field: 'objectId', headerName: 'Object ID', width: 150 },
-    { field: 'entry_time', headerName: 'Entry Time', width: 200, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
-    { field: 'exit_time', headerName: 'Exit Time', width: 200, valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded', },
+    { 
+      field: 'entry_time', 
+      headerName: 'Entry Time', 
+      width: 200, 
+      valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded',
+    },
+    { 
+      field: 'exit_time', 
+      headerName: 'Exit Time', 
+      width: 200, 
+      valueFormatter: (params) => params.value ? format(new Date(params.value), 'PPpp') : 'Not Recorded',
+    },
     { field: 'confidence', headerName: 'Confidence', width: 100 },
     { 
       field: 'is_late', 
@@ -56,6 +71,12 @@ export default function Dashboard() {
           label={params.value ? 'Yes' : 'No'} 
           color={params.value ? 'error' : 'success'} 
           size="small"
+          variant="outlined"
+          sx={{ 
+            fontWeight: 600,
+            minWidth: 60,
+            '& .MuiChip-label': { px: 1 }
+          }}
         />
       )
     },
@@ -68,6 +89,12 @@ export default function Dashboard() {
           label={params.value ? 'Yes' : 'No'} 
           color={params.value ? 'error' : 'success'} 
           size="small"
+          variant="outlined"
+          sx={{ 
+            fontWeight: 600,
+            minWidth: 60,
+            '& .MuiChip-label': { px: 1 }
+          }}
         />
       )
     },
@@ -81,8 +108,14 @@ export default function Dashboard() {
           color="error"
           onClick={() => handleAttendanceDeleteClick(params.row)}
           size="small"
+          sx={{
+            border: `1px solid ${alpha(theme.palette.error.main, 0.5)}`,
+            '&:hover': {
+              backgroundColor: alpha(theme.palette.error.main, 0.1),
+            }
+          }}
         >
-          <DeleteIcon />
+          <DeleteIcon fontSize="small" />
         </IconButton>
       ),
     },
@@ -127,6 +160,13 @@ export default function Dashboard() {
           label={params.value} 
           color={params.value === 'active' ? 'success' : 'error'} 
           size="small"
+          variant="outlined"
+          sx={{ 
+            textTransform: 'capitalize',
+            fontWeight: 600,
+            minWidth: 80,
+            '& .MuiChip-label': { px: 1 }
+          }}
         />
       )
     },
@@ -147,6 +187,14 @@ export default function Dashboard() {
           size="small"
           startIcon={<DeleteIcon />}
           onClick={() => handleUserDeleteClick(params.row)}
+          sx={{
+            borderRadius: '8px',
+            textTransform: 'none',
+            fontWeight: 600,
+            '&:hover': {
+              backgroundColor: alpha(theme.palette.error.main, 0.1),
+            }
+          }}
         >
           Delete
         </Button>
@@ -155,28 +203,104 @@ export default function Dashboard() {
   ];
 
   return (
-    <Box sx={{ maxWidth: 1600, mx: 'auto', p: 3 }}>
-      <Typography variant="h4" gutterBottom>
-        Dashboard
-      </Typography>
+    <Box sx={{ maxWidth: 1600, mx: 'auto' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h4" fontWeight="700" color="text.primary">
+          Dashboard
+        </Typography>
+        
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Paper 
+            elevation={0} 
+            sx={{ 
+              px: 2, 
+              py: 1, 
+              display: 'flex', 
+              alignItems: 'center', 
+              borderRadius: 2,
+              backgroundColor: alpha(theme.palette.primary.main, 0.1),
+              border: `1px solid ${alpha(theme.palette.primary.main, 0.2)}`
+            }}
+          >
+            <CalendarToday color="primary" fontSize="small" sx={{ mr: 1 }} />
+            <Typography variant="body2" fontWeight="600" color="primary.main">
+              {records.length} Attendance Records
+            </Typography>
+          </Paper>
+          
+          <Paper 
+            elevation={0} 
+            sx={{ 
+              px: 2, 
+              py: 1, 
+              display: 'flex', 
+              alignItems: 'center', 
+              borderRadius: 2,
+              backgroundColor: alpha(theme.palette.success.main, 0.1),
+              border: `1px solid ${alpha(theme.palette.success.main, 0.2)}`
+            }}
+          >
+            <Group color="success" fontSize="small" sx={{ mr: 1 }} />
+            <Typography variant="body2" fontWeight="600" color="success.main">
+              {users.length} Employees
+            </Typography>
+          </Paper>
+        </Box>
+      </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+      {error && !recordsLoading && !usersLoading && 
+        !userDeleteDialog.loading && !attendanceDeleteDialog.loading && (
+        <Alert 
+          severity="error" 
+          sx={{ 
+            mb: 3,
+            borderRadius: 2,
+            '& .MuiAlert-icon': {
+              alignItems: 'center'
+            }
+          }}
+        >
           {error}
         </Alert>
       )}
 
-      <Card>
+      <Card sx={{ 
+        borderRadius: 3,
+        overflow: 'hidden',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.05)'
+      }}>
         <CardContent sx={{ p: 0 }}>
-          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-            <Tabs value={tabValue} onChange={handleTabChange}>
+          <Box sx={{ 
+            borderBottom: 1, 
+            borderColor: 'divider', 
+            bgcolor: alpha(theme.palette.background.paper, 0.6)
+          }}>
+            <Tabs 
+              value={tabValue} 
+              onChange={handleTabChange}
+              sx={{
+                '& .MuiTabs-indicator': {
+                  height: 3,
+                  borderRadius: '3px 3px 0 0',
+                },
+                '& .MuiTab-root': {
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  fontSize: '0.95rem',
+                  minHeight: 56,
+                  '&.Mui-selected': {
+                    color: 'primary.main',
+                  }
+                }
+              }}
+            >
               <Tab label="Attendance Records" />
               <Tab label="Employees" />
             </Tabs>
           </Box>
 
           <TabPanel value={tabValue} index={0}>
-            <Box sx={{ p: 2 }}>
+            <Box sx={{ p: 0 }}>
               <DataTable<AttendanceRecord>
                 rows={records}
                 columns={attendanceColumns}
@@ -188,7 +312,7 @@ export default function Dashboard() {
           </TabPanel>
 
           <TabPanel value={tabValue} index={1}>
-            <Box sx={{ p: 2 }}>
+            <Box sx={{ p: 0 }}>
               <DataTable<User>
                 rows={users}
                 columns={employeeColumns}

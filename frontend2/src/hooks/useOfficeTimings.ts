@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import api from '../api/config';
 import { OfficeTiming, OfficeTimingFormData } from '../types/officeTimings';
+import { optimisticApiCall, useOptimisticState } from '../api/optimistic';
 
 export const useOfficeTimings = () => {
-  const [timings, setTimings] = useState<OfficeTiming[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentTimezone, setCurrentTimezone] = useState('');
@@ -11,6 +11,13 @@ export const useOfficeTimings = () => {
     login_time: '',
     logout_time: '',
   });
+  
+  // Use optimistic state for timings
+  const {
+    state: timings,
+    setState: setTimings,
+    optimisticUpdate
+  } = useOptimisticState<OfficeTiming[]>([]);
 
   const fetchTimings = async () => {
     try {
@@ -36,55 +43,73 @@ export const useOfficeTimings = () => {
   };
 
   const handleAddTiming = async () => {
-    try {
-      // Validate the timing data
-      if (!newTiming.login_time || !newTiming.logout_time) {
-        setError('Please provide both login and logout times');
-        return;
-      }
-
-      // Create FormData object
-      const formData = new FormData();
-      formData.append('login_time', newTiming.login_time);
-      formData.append('logout_time', newTiming.logout_time);
-
-      console.log('Sending data to server:', {
-        login_time: newTiming.login_time,
-        logout_time: newTiming.logout_time
-      }); // Debug log
-
-      setLoading(true);
-      const response = await api.post('/office-timings', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      
-      console.log('Server response:', response.data); // Debug log
-
-      if (response.status === 200 || response.status === 201) {
-        await fetchTimings();
-        setNewTiming({ login_time: '', logout_time: '' });
-        setError(null);
-      } else {
-        setError('Failed to add office timing: Invalid response from server');
-      }
-    } catch (err: any) {
-      console.error('Full error object:', err); // Debug log
-      console.error('Error response data:', err.response?.data); // Debug log
-      
-      if (err.response?.data?.detail) {
-        setError(`Failed to add office timing: ${err.response.data.detail}`);
-      } else if (err.response?.data?.message) {
-        setError(`Failed to add office timing: ${err.response.data.message}`);
-      } else if (err.response?.data) {
-        setError(`Failed to add office timing: ${JSON.stringify(err.response.data)}`);
-      } else {
-        setError('Failed to add office timing. Please try again.');
-      }
-    } finally {
-      setLoading(false);
+    // Validate the timing data
+    if (!newTiming.login_time || !newTiming.logout_time) {
+      setError('Please provide both login and logout times');
+      return;
     }
+
+    // Create FormData object
+    const formData = new FormData();
+    formData.append('login_time', newTiming.login_time);
+    formData.append('logout_time', newTiming.logout_time);
+    
+    // Create an optimistic timing object
+    const optimisticTiming: OfficeTiming = {
+      id: `temp-${Date.now()}`,
+      login_time: newTiming.login_time,
+      logout_time: newTiming.logout_time,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    
+    setLoading(true);
+    
+    // Update optimistically
+    await optimisticUpdate({
+      endpoint: '/office-timings',
+      method: 'POST',
+      data: formData,
+      optimisticUpdate: (currentTimings) => [...currentTimings, optimisticTiming],
+    });
+    
+    // Reset form
+    setNewTiming({ login_time: '', logout_time: '' });
+    setLoading(false);
+  };
+
+  const handleDeleteTiming = async (id: string) => {
+    setLoading(true);
+    
+    // Update optimistically
+    await optimisticUpdate({
+      endpoint: `/office-timings/${id}`,
+      method: 'DELETE',
+      data: null,
+      optimisticUpdate: (currentTimings) => currentTimings.filter(t => t.id !== id),
+    });
+    
+    setLoading(false);
+  };
+
+  const handleUpdateTiming = async (id: string, data: Partial<OfficeTimingFormData>) => {
+    // Create FormData object
+    const formData = new FormData();
+    if (data.login_time) formData.append('login_time', data.login_time);
+    if (data.logout_time) formData.append('logout_time', data.logout_time);
+    
+    setLoading(true);
+    
+    // Update optimistically
+    await optimisticUpdate({
+      endpoint: `/office-timings/${id}`,
+      method: 'PUT',
+      data: formData,
+      optimisticUpdate: (currentTimings) => 
+        currentTimings.map(t => t.id === id ? { ...t, ...data, updated_at: new Date().toISOString() } : t),
+    });
+    
+    setLoading(false);
   };
 
   const handleTimezoneChange = (timezone: string) => {
@@ -105,6 +130,8 @@ export const useOfficeTimings = () => {
     newTiming,
     setNewTiming,
     handleAddTiming,
+    handleDeleteTiming,
+    handleUpdateTiming,
     handleTimezoneChange,
   };
 }; 

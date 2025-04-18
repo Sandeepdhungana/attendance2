@@ -12,7 +12,17 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Card,
+  CardContent,
+  alpha,
+  useTheme,
+  Divider,
+  FormHelperText,
+  Stack,
+  Switch,
+  FormControlLabel,
 } from '@mui/material';
+import { PersonAdd, Save, Badge } from '@mui/icons-material';
 import { useWebSocket } from '../App';
 import { useCameraCapture } from '../hooks/useCameraCapture';
 import { CameraView } from '../components/register/CameraView';
@@ -28,6 +38,7 @@ interface Shift {
 }
 
 const Register: React.FC = () => {
+  const theme = useTheme();
   const [employee_id, setEmployeeId] = useState('');
   const [name, setName] = useState('');
   const [department, setDepartment] = useState('');
@@ -110,7 +121,7 @@ const Register: React.FC = () => {
     setSuccess(null);
 
     if (!employee_id || !name || !department || !position || !shift_id) {
-      setError('Please fill in all fields');
+      setError('Please fill in all required fields');
       return;
     }
 
@@ -193,201 +204,353 @@ const Register: React.FC = () => {
   };
 
   return (
-    <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
-      <Typography variant="h4" gutterBottom>
-        Register Employee
-      </Typography>
+    <Box sx={{ maxWidth: 1200, mx: 'auto' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 4 }}>
+        <PersonAdd 
+          fontSize="large" 
+          sx={{ 
+            color: theme.palette.primary.main,
+            backgroundColor: alpha(theme.palette.primary.main, 0.1),
+            p: 1,
+            borderRadius: 2,
+            mr: 2
+          }} 
+        />
+        <Typography variant="h4" fontWeight="700" color="text.primary">
+          Register Employee
+        </Typography>
+      </Box>
 
-      <Paper sx={{ p: 3 }}>
-        <form onSubmit={handleSubmit}>
-          <Grid container spacing={3}>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Employee ID"
-                value={employee_id}
-                onChange={(e) => setEmployeeId(e.target.value)}
-                required
-              />
-            </Grid>
-            
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-              />
-            </Grid>
+      {error && (
+        <Alert 
+          severity="error" 
+          sx={{ 
+            mb: 3,
+            borderRadius: 2,
+            '& .MuiAlert-icon': {
+              alignItems: 'center'
+            }
+          }}
+        >
+          {error}
+        </Alert>
+      )}
 
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Department"
-                value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                required
-              />
-            </Grid>
+      {success && (
+        <Alert 
+          severity="success" 
+          sx={{ 
+            mb: 3,
+            borderRadius: 2,
+            '& .MuiAlert-icon': {
+              alignItems: 'center'
+            }
+          }}
+        >
+          {success}
+        </Alert>
+      )}
 
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Position"
-                value={position}
-                onChange={(e) => setPosition(e.target.value)}
-                required
-              />
-            </Grid>
+      <Card 
+        sx={{ 
+          borderRadius: 3,
+          overflow: 'hidden',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+          mb: 4
+        }}
+      >
+        <CardContent sx={{ p: 0 }}>
+          <Box sx={{ 
+            p: 3, 
+            backgroundColor: alpha(theme.palette.primary.main, 0.05),
+            borderBottom: `1px solid ${alpha(theme.palette.primary.main, 0.1)}`
+          }}>
+            <Typography variant="h6" fontWeight="600">
+              Employee Information
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Enter the basic information about the employee
+            </Typography>
+          </Box>
+          
+          <form onSubmit={handleSubmit}>
+            <Box sx={{ p: 3 }}>
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Employee ID"
+                    value={employee_id}
+                    onChange={(e) => setEmployeeId(e.target.value)}
+                    required
+                    variant="outlined"
+                    InputProps={{
+                      startAdornment: <Badge sx={{ mr: 1, color: theme.palette.text.secondary }} />
+                    }}
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  />
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    required
+                    variant="outlined"
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  />
+                </Grid>
 
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Phone Number"
-                value={phone}
-                onChange={handlePhoneChange}
-                error={!!phoneError}
-                helperText={phoneError}
-                required
-              />
-            </Grid>
-            
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Email"
-                type="email"
-                value={email}
-                onChange={handleEmailChange}
-                error={!!emailError}
-                helperText={emailError}
-                required
-              />
-            </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Department"
+                    value={department}
+                    onChange={(e) => setDepartment(e.target.value)}
+                    required
+                    variant="outlined"
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  />
+                </Grid>
 
-            <Grid item xs={12}>
-              <FormControl fullWidth>
-                <InputLabel>Status</InputLabel>
-                <Select
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value)}
-                  label="Status"
-                >
-                  <MenuItem value="active">Active</MenuItem>
-                  <MenuItem value="inactive">Inactive</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Position"
+                    value={position}
+                    onChange={(e) => setPosition(e.target.value)}
+                    required
+                    variant="outlined"
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  />
+                </Grid>
 
-            <Grid item xs={12}>
-              <FormControl fullWidth>
-                <InputLabel>Admin Access</InputLabel>
-                <Select
-                  value={isAdmin.toString()}
-                  onChange={(e) => setIsAdmin(e.target.value === 'true')}
-                  label="Admin Access"
-                >
-                  <MenuItem value="false">No</MenuItem>
-                  <MenuItem value="true">Yes</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Phone Number"
+                    value={phone}
+                    onChange={handlePhoneChange}
+                    error={!!phoneError}
+                    helperText={phoneError}
+                    variant="outlined"
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  />
+                </Grid>
 
-            <Grid item xs={12}>
-              <FormControl fullWidth>
-                <InputLabel>Shift</InputLabel>
-                <Select
-                  value={shift_id}
-                  onChange={(e) => setShiftId(e.target.value)}
-                  label="Shift"
-                  required
-                >
-                  {shifts.map((shift) => (
-                    <MenuItem key={shift.objectId} value={shift.objectId}>
-                      {shift.name} ({shift.login_time} - {shift.logout_time})
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Email"
+                    value={email}
+                    onChange={handleEmailChange}
+                    error={!!emailError}
+                    helperText={emailError}
+                    variant="outlined"
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  />
+                </Grid>
 
-            <Grid item xs={12}>
-              <CaptureTypeSelector
-                captureType={captureType}
-                onChange={handleCaptureTypeChange}
-              />
-            </Grid>
+                <Grid item xs={12} md={6}>
+                  <FormControl 
+                    fullWidth
+                    variant="outlined"
+                    required
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  >
+                    <InputLabel>Shift</InputLabel>
+                    <Select
+                      value={shift_id}
+                      onChange={(e) => setShiftId(e.target.value)}
+                      label="Shift"
+                    >
+                      {shifts.map((shift) => (
+                        <MenuItem key={shift.objectId} value={shift.objectId}>
+                          {shift.name} ({shift.login_time} - {shift.logout_time})
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
 
-            {captureType === 'webcam' ? (
-              <Grid item xs={12}>
-                <CameraView
-                  webcamRef={webcamRef}
-                  availableCameras={availableCameras}
-                  selectedCamera={selectedCamera}
-                  onCameraChange={handleCameraChange}
-                  onCapture={handleCapture}
-                />
+                <Grid item xs={12} md={6}>
+                  <FormControl 
+                    fullWidth
+                    variant="outlined"
+                    required
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: 2,
+                      }
+                    }}
+                  >
+                    <InputLabel>Status</InputLabel>
+                    <Select
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value)}
+                      label="Status"
+                    >
+                      <MenuItem value="active">Active</MenuItem>
+                      <MenuItem value="inactive">Inactive</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                <Grid item xs={12}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={isAdmin}
+                        onChange={(e) => setIsAdmin(e.target.checked)}
+                        color="primary"
+                      />
+                    }
+                    label={
+                      <Typography 
+                        variant="body2"
+                        sx={{ 
+                          fontWeight: isAdmin ? 600 : 400,
+                          color: isAdmin ? 'primary.main' : 'text.primary'
+                        }}
+                      >
+                        Administrator Access
+                      </Typography>
+                    }
+                  />
+                </Grid>
               </Grid>
-            ) : (
-              <Grid item xs={12}>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileUpload}
-                  style={{ display: 'none' }}
-                  ref={fileInputRef}
-                />
-                <Button
-                  variant="contained"
-                  onClick={() => fileInputRef.current?.click()}
-                  fullWidth
-                >
-                  Upload Photo
-                </Button>
-              </Grid>
-            )}
+            </Box>
+            
+            <Divider />
+            
+            <Box sx={{ p: 3 }}>
+              <Typography variant="h6" fontWeight="600" gutterBottom>
+                Photo
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Capture or upload a photo of the employee
+              </Typography>
 
-            <Grid item xs={12}>
-              <ImagePreview image={image} />
-            </Grid>
+              <Paper 
+                sx={{ 
+                  p: 3, 
+                  backgroundColor: alpha(theme.palette.background.default, 0.8),
+                  borderRadius: 2,
+                  border: `1px solid ${alpha(theme.palette.divider, 0.7)}`
+                }}
+              >
+                <Box sx={{ mb: 3 }}>
+                  <CaptureTypeSelector
+                    captureType={captureType}
+                    onChange={handleCaptureTypeChange}
+                  />
+                </Box>
 
-            <Grid item xs={12}>
+                {captureType === 'webcam' ? (
+                  <CameraView
+                    webcamRef={webcamRef}
+                    availableCameras={availableCameras}
+                    selectedCamera={selectedCamera}
+                    onCameraChange={handleCameraChange}
+                    onCapture={handleCapture}
+                  />
+                ) : (
+                  <Box>
+                    <Button
+                      variant="outlined"
+                      component="label"
+                      fullWidth
+                      sx={{ 
+                        p: 1.5, 
+                        borderRadius: 2,
+                        borderStyle: 'dashed',
+                        borderWidth: 2,
+                        textTransform: 'none',
+                        fontWeight: 600
+                      }}
+                    >
+                      Upload Photo
+                      <input
+                        type="file"
+                        hidden
+                        accept="image/*"
+                        ref={fileInputRef}
+                        onChange={handleFileUpload}
+                      />
+                    </Button>
+                  </Box>
+                )}
+
+                <ImagePreview image={image} />
+              </Paper>
+            </Box>
+
+            <Box sx={{ 
+              p: 3, 
+              backgroundColor: alpha(theme.palette.background.default, 0.6),
+              borderTop: `1px solid ${alpha(theme.palette.divider, 0.7)}`,
+              display: 'flex', 
+              justifyContent: 'flex-end'
+            }}>
               <Button
                 type="submit"
                 variant="contained"
                 color="primary"
-                fullWidth
-                disabled={!image}
+                size="large"
+                startIcon={<Save />}
+                sx={{ 
+                  px: 4, 
+                  py: 1.2,
+                  borderRadius: 2,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                }}
               >
-                Register
+                Register Employee
               </Button>
-            </Grid>
-          </Grid>
-        </form>
-
-        <Snackbar
-          open={!!error}
-          autoHideDuration={6000}
-          onClose={() => setError(null)}
-        >
-          <Alert onClose={() => setError(null)} severity="error">
-            {error}
-          </Alert>
-        </Snackbar>
-
-        <Snackbar
-          open={!!success}
-          autoHideDuration={6000}
-          onClose={() => setSuccess(null)}
-        >
-          <Alert onClose={() => setSuccess(null)} severity="success">
-            {success}
-          </Alert>
-        </Snackbar>
-      </Paper>
+            </Box>
+          </form>
+        </CardContent>
+      </Card>
+      
+      <Snackbar 
+        open={!!success || !!error} 
+        autoHideDuration={6000} 
+        onClose={() => { setSuccess(null); setError(null); }}
+      />
     </Box>
   );
-};
+}
 
 export default Register; 

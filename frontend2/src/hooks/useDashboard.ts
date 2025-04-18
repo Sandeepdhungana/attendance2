@@ -133,25 +133,34 @@ export function useDashboard() {
   };
 
   const handleUserDeleteConfirm = async () => {
-    if (userDeleteDialog.item) {
-      try {
-        // Use objectId for deletion if available, otherwise fall back to employee_id
-        const deleteId = userDeleteDialog.item.objectId || userDeleteDialog.item.employee_id;
-        console.log(`Deleting user with ID: ${deleteId}`);
-        
-        await api.delete(`/employees/${deleteId}`);
-        
-        // Filter users using employee_id (the primary identifier)
-        const identifierToFilter = userDeleteDialog.item.employee_id;
-        setUsers(users.filter(u => u.employee_id !== identifierToFilter));
-        
-        setUserDeleteDialog({ open: false, item: null, loading: false });
-        // Refresh data
-        fetchData();
-      } catch (err) {
-        console.error('Error deleting user:', err);
-        setError(err instanceof Error ? err.message : 'Failed to delete user');
-      }
+    if (!userDeleteDialog.item) return;
+    
+    // Set loading state
+    setUserDeleteDialog(prev => ({ ...prev, loading: true }));
+    
+    // Store the item to be deleted
+    const userToDelete = userDeleteDialog.item;
+    const identifierToFilter = userToDelete.employee_id;
+    const deleteId = userToDelete.objectId || userToDelete.employee_id;
+    
+    // Optimistic UI update - remove the user from state immediately
+    setUsers(prevUsers => prevUsers.filter(u => u.employee_id !== identifierToFilter));
+    
+    try {
+      // Make the API call
+      console.log(`Deleting user with ID: ${deleteId}`);
+      await api.delete(`/employees/${deleteId}`);
+      
+      // Close the dialog
+      setUserDeleteDialog({ open: false, item: null, loading: false });
+      
+      // No need to refresh data since we've already updated the UI
+    } catch (err) {
+      console.error('Error deleting user:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete user. UI has been refreshed.');
+      
+      // If the API call fails, fetch all data again to ensure UI is in sync with backend
+      fetchData();
     }
   };
 
@@ -161,18 +170,32 @@ export function useDashboard() {
   };
 
   const handleAttendanceDeleteConfirm = async () => {
-    if (attendanceDeleteDialog.item) {
-      console.log('Confirming deletion for:', attendanceDeleteDialog.item);
-      try {
-        await api.delete(`/attendance/${attendanceDeleteDialog.item.objectId}`);
-        setRecords(records.filter(r => r.id !== attendanceDeleteDialog.item?.id));
-        setAttendanceDeleteDialog({ open: false, item: null, loading: false });
-        // Refresh data
-        fetchData();
-      } catch (err) {
-        console.error('Error deleting attendance record:', err);
-        setError(err instanceof Error ? err.message : 'Failed to delete attendance record');
-      }
+    if (!attendanceDeleteDialog.item) return;
+    
+    // Set loading state
+    setAttendanceDeleteDialog(prev => ({ ...prev, loading: true }));
+    
+    // Store the item to be deleted
+    const recordToDelete = attendanceDeleteDialog.item;
+    
+    // Optimistic UI update - remove the record from state immediately
+    setRecords(prevRecords => prevRecords.filter(r => r.id !== recordToDelete.id));
+    
+    try {
+      // Make the API call
+      console.log('Confirming deletion for:', recordToDelete);
+      await api.delete(`/attendance/${recordToDelete.objectId}`);
+      
+      // Close the dialog
+      setAttendanceDeleteDialog({ open: false, item: null, loading: false });
+      
+      // No need to refresh data since we've already updated the UI
+    } catch (err) {
+      console.error('Error deleting attendance record:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete attendance record. UI has been refreshed.');
+      
+      // If the API call fails, fetch all data again to ensure UI is in sync with backend
+      fetchData();
     }
   };
 

@@ -24,6 +24,7 @@ import {
   Select,
   MenuItem,
   Chip,
+  CircularProgress
 } from '@mui/material';
 import { Delete as DeleteIcon, Edit as EditIcon, Group as GroupIcon } from '@mui/icons-material';
 import api from '../api/config';
@@ -57,6 +58,9 @@ export default function Shifts() {
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [isCreatingShift, setIsCreatingShift] = useState(false);
+  const [isLoadingShifts, setIsLoadingShifts] = useState(false);
+  const [isLoadingEmployees, setIsLoadingEmployees] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; shiftId: string | null }>({
     open: false,
     shiftId: null,
@@ -92,21 +96,27 @@ export default function Shifts() {
 
   const fetchShifts = async () => {
     try {
+      setIsLoadingShifts(true);
+      setError(null);
       const response = await api.get('/shifts');
       setShifts(response.data);
-      setError(null);
     } catch (error) {
       setError('Failed to fetch shifts');
       console.error('Error fetching shifts:', error);
+    } finally {
+      setIsLoadingShifts(false);
     }
   };
 
   const fetchEmployees = async () => {
     try {
+      setIsLoadingEmployees(true);
       const response = await api.get('/employees');
       setEmployees(response.data);
     } catch (error) {
       console.error('Error fetching employees:', error);
+    } finally {
+      setIsLoadingEmployees(false);
     }
   };
 
@@ -120,45 +130,131 @@ export default function Shifts() {
       return;
     }
 
+    setIsCreatingShift(true);
+    
     try {
-      await api.post('/shifts', newShift);
-      setSuccess('Shift created successfully');
-      setNewShift({ name: '', login_time: '', logout_time: '', grace_period: 15 });
-      fetchShifts();
+      // Make the API call first (we need the objectId from the response)
+      const response = await api.post('/shifts', newShift);
+      
+      // If we have a valid response with an objectId
+      if (response.data && response.data.objectId) {
+        // Create a new shift object with the response data
+        const createdShift = {
+          objectId: response.data.objectId,
+          name: newShift.name,
+          login_time: newShift.login_time,
+          logout_time: newShift.logout_time,
+          grace_period: newShift.grace_period,
+          created_at: new Date().toISOString()
+        };
+        
+        // Update the shifts state by adding the new shift
+        setShifts(prevShifts => [...prevShifts, createdShift]);
+        
+        // Show success message
+        setSuccess('Shift created successfully');
+        
+        // Reset the form
+        setNewShift({ name: '', login_time: '', logout_time: '', grace_period: 15 });
+        
+        // Clear success message after 3 seconds
+        setTimeout(() => setSuccess(null), 3000);
+      } else {
+        // Handle case where response doesn't have expected data
+        console.error('Invalid response format from API:', response);
+        setError('Failed to create shift: Invalid response from server');
+        fetchShifts(); // Fallback to fetching all shifts
+      }
     } catch (error) {
       setError('Failed to create shift');
       console.error('Error creating shift:', error);
+    } finally {
+      setIsCreatingShift(false);
     }
   };
 
   const handleDelete = async () => {
     if (!deleteDialog.shiftId) return;
 
+    // Store the shift ID that's being deleted
+    const shiftIdToDelete = deleteDialog.shiftId;
+    
+    // Optimistic UI update - remove the shift from state first
+    setShifts(prevShifts => prevShifts.filter(shift => shift.objectId !== shiftIdToDelete));
+    
+    // Close dialog immediately for better UX
+    setDeleteDialog({ open: false, shiftId: null });
+    
     try {
-      await api.delete(`/shifts/${deleteDialog.shiftId}`);
+      // Then make the API call
+      await api.delete(`/shifts/${shiftIdToDelete}`);
+      
+      // Show success message
       setSuccess('Shift deleted successfully');
-      setDeleteDialog({ open: false, shiftId: null });
-      fetchShifts();
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError('Failed to delete shift');
+      // If the API call fails, revert by fetching all data again
+      setError('Failed to delete shift. The list has been refreshed.');
       console.error('Error deleting shift:', error);
+      fetchShifts();
     }
   };
 
   const handleAssignShift = async () => {
     if (!assignDialog.shiftId || !selectedEmployee) return;
 
+    // Store the shift and employee IDs
+    const shiftId = assignDialog.shiftId;
+    const employeeId = selectedEmployee;
+    
+    // Get the employee and shift objects
+    const employeeToUpdate = employees.find(emp => emp.employee_id === employeeId);
+    const shiftToAssign = shifts.find(shift => shift.objectId === shiftId);
+    
+    if (!employeeToUpdate || !shiftToAssign) {
+      setError('Employee or shift not found');
+      return;
+    }
+
+    // Optimistic UI update - update employee in state first
+    setEmployees(prevEmployees => 
+      prevEmployees.map(emp => 
+        emp.employee_id === employeeId
+          ? {
+              ...emp,
+              shift: {
+                objectId: shiftToAssign.objectId,
+                name: shiftToAssign.name,
+                login_time: shiftToAssign.login_time,
+                logout_time: shiftToAssign.logout_time
+              }
+            }
+          : emp
+      )
+    );
+
+    // Close dialog immediately for better UX
+    setAssignDialog({ open: false, shiftId: null });
+    setSelectedEmployee('');
+    
     try {
-      await api.put(`/employees/${selectedEmployee}`, {
-        shift_id: assignDialog.shiftId
+      // Then make the API call
+      await api.put(`/employees/${employeeToUpdate.objectId}`, {
+        shift_id: shiftId
       });
+      
+      // Show success message
       setSuccess('Shift assigned successfully');
-      setAssignDialog({ open: false, shiftId: null });
-      setSelectedEmployee('');
-      fetchEmployees();
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError('Failed to assign shift');
+      // If the API call fails, revert by fetching employees data again
+      setError('Failed to assign shift. The list has been refreshed.');
       console.error('Error assigning shift:', error);
+      fetchEmployees();
     }
   };
 
@@ -177,15 +273,43 @@ export default function Shifts() {
 
   const handleUpdateShift = async () => {
     if (!editDialog.shift) return;
-
+    
+    // Store the shift to be updated
+    const shiftToUpdate = editDialog.shift;
+    const updatedShiftData = editedShift;
+    
+    // Optimistic UI update - update the shift in state first
+    setShifts(prevShifts => 
+      prevShifts.map(shift => 
+        shift.objectId === shiftToUpdate.objectId
+          ? { 
+              ...shift, 
+              name: updatedShiftData.name,
+              login_time: updatedShiftData.login_time,
+              logout_time: updatedShiftData.logout_time,
+              grace_period: updatedShiftData.grace_period
+            }
+          : shift
+      )
+    );
+    
+    // Close dialog immediately for better UX
+    setEditDialog({ open: false, shift: null });
+    
     try {
-      await api.put(`/shifts/${editDialog.shift.objectId}`, editedShift);
+      // Then make the API call
+      await api.put(`/shifts/${shiftToUpdate.objectId}`, updatedShiftData);
+      
+      // Show success message
       setSuccess('Shift updated successfully');
-      setEditDialog({ open: false, shift: null });
-      fetchShifts();
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError('Failed to update shift');
+      // If the API call fails, revert by fetching all data again
+      setError('Failed to update shift. The list has been refreshed.');
       console.error('Error updating shift:', error);
+      fetchShifts();
     }
   };
 
@@ -199,7 +323,7 @@ export default function Shifts() {
         Manage Shifts
       </Typography>
 
-      {error && (
+      {error && !isLoadingShifts && !isCreatingShift && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
         </Alert>
@@ -223,6 +347,7 @@ export default function Shifts() {
                 value={newShift.name}
                 onChange={(e) => setNewShift({ ...newShift, name: e.target.value })}
                 required
+                disabled={isCreatingShift}
               />
               <TextField
                 label="Login Time"
@@ -232,6 +357,7 @@ export default function Shifts() {
                 InputLabelProps={{ shrink: true }}
                 inputProps={{ step: 300 }}
                 required
+                disabled={isCreatingShift}
               />
               <TextField
                 label="Logout Time"
@@ -241,6 +367,7 @@ export default function Shifts() {
                 InputLabelProps={{ shrink: true }}
                 inputProps={{ step: 300 }}
                 required
+                disabled={isCreatingShift}
               />
               <TextField
                 label="Grace Period (minutes)"
@@ -250,10 +377,16 @@ export default function Shifts() {
                 InputLabelProps={{ shrink: true }}
                 inputProps={{ min: 0, max: 60, step: 5 }}
                 required
+                disabled={isCreatingShift}
               />
             </Box>
-            <Button type="submit" variant="contained">
-              Add Shift
+            <Button 
+              type="submit" 
+              variant="contained"
+              disabled={isCreatingShift}
+              startIcon={isCreatingShift ? <CircularProgress size={20} /> : null}
+            >
+              {isCreatingShift ? 'Creating...' : 'Add Shift'}
             </Button>
           </form>
         </CardContent>
@@ -264,71 +397,92 @@ export default function Shifts() {
           <Typography variant="h6" gutterBottom>
             Existing Shifts
           </Typography>
-          <TableContainer component={Paper}>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Shift Name</TableCell>
-                  <TableCell>Login Time</TableCell>
-                  <TableCell>Logout Time</TableCell>
-                  <TableCell>Grace Period (min)</TableCell>
-                  <TableCell>Assigned Employees</TableCell>
-                  <TableCell>Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {shifts.map((shift) => {
-                  const shiftEmployees = getEmployeesInShift(shift.objectId);
-                  return (
-                    <TableRow key={shift.objectId}>
-                      <TableCell>{shift.name}</TableCell>
-                      <TableCell>{shift.login_time}</TableCell>
-                      <TableCell>{shift.logout_time}</TableCell>
-                      <TableCell>{shift.grace_period || 0}</TableCell>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                          {shiftEmployees.map(emp => (
-                            <Chip
-                              key={emp.objectId}
-                              label={`${emp.name} (${emp.employee_id})`}
-                              size="small"
-                            />
-                          ))}
-                          {shiftEmployees.length === 0 && (
-                            <Typography variant="body2" color="text.secondary">
-                              No employees assigned
-                            </Typography>
-                          )}
-                        </Box>
-                      </TableCell>
-                      <TableCell>
-                        <IconButton
-                          color="primary"
-                          onClick={() => handleEdit(shift)}
-                          sx={{ mr: 1 }}
-                        >
-                          <EditIcon />
-                        </IconButton>
-                        <IconButton
-                          color="secondary"
-                          onClick={() => setAssignDialog({ open: true, shiftId: shift.objectId })}
-                          sx={{ mr: 1 }}
-                        >
-                          <GroupIcon />
-                        </IconButton>
-                        <IconButton
-                          color="error"
-                          onClick={() => setDeleteDialog({ open: true, shiftId: shift.objectId })}
-                        >
-                          <DeleteIcon />
-                        </IconButton>
+          {isLoadingShifts ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Shift Name</TableCell>
+                    <TableCell>Login Time</TableCell>
+                    <TableCell>Logout Time</TableCell>
+                    <TableCell>Grace Period (min)</TableCell>
+                    <TableCell>Assigned Employees</TableCell>
+                    <TableCell>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {shifts.map((shift) => {
+                    const shiftEmployees = getEmployeesInShift(shift.objectId);
+                    return (
+                      <TableRow key={shift.objectId}>
+                        <TableCell>{shift.name}</TableCell>
+                        <TableCell>{shift.login_time}</TableCell>
+                        <TableCell>{shift.logout_time}</TableCell>
+                        <TableCell>{shift.grace_period || 0}</TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                            {isLoadingEmployees ? (
+                              <CircularProgress size={20} />
+                            ) : (
+                              <>
+                                {shiftEmployees.map(emp => (
+                                  <Chip
+                                    key={emp.objectId}
+                                    label={`${emp.name} (${emp.employee_id})`}
+                                    size="small"
+                                  />
+                                ))}
+                                {shiftEmployees.length === 0 && (
+                                  <Typography variant="body2" color="text.secondary">
+                                    No employees assigned
+                                  </Typography>
+                                )}
+                              </>
+                            )}
+                          </Box>
+                        </TableCell>
+                        <TableCell>
+                          <IconButton
+                            color="primary"
+                            onClick={() => handleEdit(shift)}
+                            sx={{ mr: 1 }}
+                          >
+                            <EditIcon />
+                          </IconButton>
+                          <IconButton
+                            color="secondary"
+                            onClick={() => setAssignDialog({ open: true, shiftId: shift.objectId })}
+                            sx={{ mr: 1 }}
+                          >
+                            <GroupIcon />
+                          </IconButton>
+                          <IconButton
+                            color="error"
+                            onClick={() => setDeleteDialog({ open: true, shiftId: shift.objectId })}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {shifts.length === 0 && !isLoadingShifts && (
+                    <TableRow>
+                      <TableCell colSpan={6} align="center" sx={{ py: 3 }}>
+                        <Typography variant="body1" color="text.secondary">
+                          No shifts found. Add a new shift to get started.
+                        </Typography>
                       </TableCell>
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </TableContainer>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
         </CardContent>
       </Card>
 

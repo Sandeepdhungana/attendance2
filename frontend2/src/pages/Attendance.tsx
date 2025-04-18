@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import { Box, Card, CardContent, Typography } from '@mui/material';
+import { Box, Card, CardContent, Typography, Grid, useTheme, alpha, Paper, Divider } from '@mui/material';
+import { AccessTime, CameraAlt, Videocam } from '@mui/icons-material';
 import { useCamera } from '../hooks/useCamera';
 import { useWebSocketHandler } from '../hooks/useWebSocketHandler';
 import { useStreaming } from '../hooks/useStreaming';
@@ -14,6 +15,7 @@ import { StreamingStatus } from '../components/attendance/StreamingStatus';
 import api from '../api/config';
 
 export default function Attendance() {
+  const theme = useTheme();
   const [isCapturing, setIsCapturing] = useState(false);
   const [entryType, setEntryType] = useState<'entry' | 'exit'>('entry');
 
@@ -104,46 +106,123 @@ export default function Attendance() {
   }, [startVideoStream, videoRef]);
 
   return (
-    <Box sx={{ maxWidth: 800, mx: 'auto', p: 3 }}>
-      <Typography variant="h4" gutterBottom>
-        Face Attendance
-      </Typography>
+    <Box sx={{ maxWidth: 1200, mx: 'auto' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 4 }}>
+        <AccessTime 
+          fontSize="large" 
+          sx={{ 
+            color: theme.palette.primary.main,
+            backgroundColor: alpha(theme.palette.primary.main, 0.1),
+            p: 1,
+            borderRadius: 2,
+            mr: 2
+          }} 
+        />
+        <Typography variant="h4" fontWeight="700" color="text.primary">
+          Face Attendance
+        </Typography>
+      </Box>
 
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <CameraView
-            isVideoMode={isVideoMode}
-            videoPreview={videoPreview}
-            availableCameras={availableCameras}
-            selectedCamera={selectedCamera}
-            webcamRef={webcamRef}
-            videoRef={videoRef}
-            handleCameraChange={handleCameraChange}
-            faceCount={faceCount}
-          />
+      <Grid container spacing={3}>
+        <Grid item xs={12} lg={8}>
+          <Card sx={{ 
+            mb: 3, 
+            borderRadius: 3,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+            overflow: 'hidden'
+          }}>
+            <Box sx={{ 
+              p: 3, 
+              backgroundColor: alpha(theme.palette.primary.main, 0.05),
+              borderBottom: `1px solid ${alpha(theme.palette.primary.main, 0.1)}`
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  {isVideoMode ? (
+                    <Videocam sx={{ mr: 1, color: theme.palette.primary.main }} />
+                  ) : (
+                    <CameraAlt sx={{ mr: 1, color: theme.palette.primary.main }} />
+                  )}
+                  <Typography variant="h6" fontWeight="600">
+                    {isVideoMode ? 'Video Mode' : 'Camera Mode'}
+                  </Typography>
+                </Box>
+                <StreamingStatus isStreaming={isStreaming} />
+              </Box>
+            </Box>
+            
+            <CardContent sx={{ p: 3 }}>
+              <CameraView
+                isVideoMode={isVideoMode}
+                videoPreview={videoPreview}
+                availableCameras={availableCameras}
+                selectedCamera={selectedCamera}
+                webcamRef={webcamRef}
+                videoRef={videoRef}
+                handleCameraChange={handleCameraChange}
+                faceCount={faceCount}
+              />
+            </CardContent>
 
-          <StreamingStatus isStreaming={isStreaming} />
+            <Box sx={{ 
+              p: 3, 
+              backgroundColor: alpha(theme.palette.background.default, 0.6),
+              borderTop: `1px solid ${alpha(theme.palette.divider, 0.7)}`
+            }}>
+              <Controls
+                entryType={entryType}
+                isVideoMode={isVideoMode}
+                isCapturing={isCapturing}
+                isStreaming={isStreaming}
+                webcamRef={webcamRef}
+                videoFile={videoFile}
+                handleEntryTypeChange={handleEntryTypeChange}
+                handleVideoChange={handleVideoChange}
+                capture={capture}
+                startStreaming={handleStartStreaming}
+                stopStreaming={stopStreaming}
+                startVideoStream={handleStartVideoStream}
+                message={message}
+              />
+            </Box>
+          </Card>
+        </Grid>
 
-          <Controls
-            entryType={entryType}
-            isVideoMode={isVideoMode}
-            isCapturing={isCapturing}
-            isStreaming={isStreaming}
-            webcamRef={webcamRef}
-            videoFile={videoFile}
-            handleEntryTypeChange={handleEntryTypeChange}
-            handleVideoChange={handleVideoChange}
-            capture={capture}
-            startStreaming={handleStartStreaming}
-            stopStreaming={stopStreaming}
-            startVideoStream={handleStartVideoStream}
-            message={message}
-          />
+        <Grid item xs={12} lg={4}>
+          <Paper
+            elevation={0}
+            sx={{
+              borderRadius: 3,
+              border: `1px solid ${alpha(theme.palette.divider, 0.7)}`,
+              mb: 3,
+              overflow: 'hidden'
+            }}
+          >
+            <Box sx={{ 
+              p: 2, 
+              backgroundColor: alpha(theme.palette.info.main, 0.05),
+              borderBottom: `1px solid ${alpha(theme.palette.info.main, 0.1)}`
+            }}>
+              <Typography variant="h6" fontWeight="600">
+                Detected Users
+              </Typography>
+            </Box>
+            <Box sx={{ p: 2 }}>
+              <DetectedUsers users={multipleUsers} />
+            </Box>
+          </Paper>
+        </Grid>
 
-          <DetectedUsers users={multipleUsers} />
+        <Grid item xs={12}>
           <AttendanceList recentAttendance={recentAttendance} />
-        </CardContent>
-      </Card>
+        </Grid>
+        
+        {earlyExitReasons.length > 0 && (
+          <Grid item xs={12}>
+            <EarlyExitList earlyExitReasons={earlyExitReasons} />
+          </Grid>
+        )}
+      </Grid>
 
       <EarlyExitDialog
         open={earlyExitDialog.open}
