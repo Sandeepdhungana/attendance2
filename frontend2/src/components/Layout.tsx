@@ -41,14 +41,14 @@ const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Register Employee', icon: <PersonAddIcon />, path: '/register' },
   { text: 'Attendance', icon: <AccessTimeIcon />, path: '/attendance' },
-  { text: 'Employees', icon: <PeopleIcon />, path: '/users' },
-  { text: 'Shifts', icon: <ScheduleIcon />, path: '/shifts' },
+  // { text: 'Employees', icon: <PeopleIcon />, path: '/employees' },
+  // { text: 'Shifts', icon: <ScheduleIcon />, path: '/shifts' },
   { text: 'Employee Shifts', icon: <SwapHorizIcon />, path: '/employee-shifts' },
 ];
 
 const adminItems = [
   { text: 'Office Timings', icon: <AccessTimeIcon />, path: '/office-timings' },
-  { text: 'Early Exit Reasons', icon: <ExitToAppIcon />, path: '/early-exit-reasons' },
+  // { text: 'Early Exit Reasons', icon: <ExitToAppIcon />, path: '/early-exit-reasons' },
   { text: 'Shifts', icon: <ScheduleIcon />, path: '/shifts' },
 ];
 
@@ -70,6 +70,26 @@ export default function Layout({ children }: LayoutProps) {
       <Divider />
       <List>
         {menuItems.map((item) => (
+          <ListItem key={item.text} disablePadding>
+            <ListItemButton
+              component={Link}
+              to={item.path}
+              selected={location.pathname === item.path}
+            >
+              <ListItemIcon>{item.icon}</ListItemIcon>
+              <ListItemText primary={item.text} />
+            </ListItemButton>
+          </ListItem>
+        ))}
+      </List>
+      <Divider />
+      <List>
+        <ListItem>
+          <Typography variant="subtitle2" color="text.secondary">
+            Admin Settings
+          </Typography>
+        </ListItem>
+        {adminItems.map((item) => (
           <ListItem key={item.text} disablePadding>
             <ListItemButton
               component={Link}
