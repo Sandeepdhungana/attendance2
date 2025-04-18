@@ -174,7 +174,7 @@ async def submit_employee_early_exit_reason(request: EmployeeEarlyExitRequest):
             raise HTTPException(status_code=500, detail="Failed to create early exit reason")
         
         # Broadcast the update with the is_early_exit flag
-        await broadcast_attendance_update([{
+        await broadcast_attendance_update({
             "action": "early_exit_reason",
             "employee_id": employee_id,
             "name": employee_name,
@@ -183,7 +183,7 @@ async def submit_employee_early_exit_reason(request: EmployeeEarlyExitRequest):
             "reason": reason,
             "is_early_exit": is_early_exit,
             "objectId": new_reason.get("objectId")
-        }])
+        })
         
         logger.info(f"Early exit reason submitted successfully for employee {employee_id}")
         return {
@@ -282,14 +282,14 @@ async def delete_early_exit_reason(reason_id: str):
         
         # Broadcast the deletion
         current_time = get_local_time()
-        await broadcast_attendance_update([{
+        await broadcast_attendance_update({
             "action": "delete_early_exit_reason",
             "employee_id": employee_id,
             "name": employee_name,
             "attendance_id": attendance_id,
             "reason_id": reason_id,
             "timestamp": current_time.isoformat()
-        }])
+        })
         
         logger.info(f"Early exit reason deleted successfully: ID {reason_id}")
         return {"message": "Early exit reason deleted successfully"}

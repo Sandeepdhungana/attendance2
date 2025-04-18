@@ -11,7 +11,7 @@ import {
 interface DeleteConfirmationDialogProps {
   deleteDialog: {
     open: boolean;
-    reasonId: number | null;
+    reasonId: string | null;
   };
   onClose: () => void;
   onConfirm: () => void;

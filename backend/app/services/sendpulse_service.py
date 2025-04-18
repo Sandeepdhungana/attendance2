@@ -27,6 +27,7 @@ def get_sendpulse_token():
 
 def send_message_by_phone(bot_id=None, phone=None, message_text=None):
     """Send a message via WhatsApp using SendPulse API, including both text and images."""
+    return
     token = get_sendpulse_token()
     bot_id = "67ff97f2dccc60523807cffd"
     if not token:

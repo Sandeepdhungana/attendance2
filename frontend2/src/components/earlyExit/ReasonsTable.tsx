@@ -16,7 +16,7 @@ import { format } from 'date-fns';
 
 interface ReasonsTableProps {
   reasons: EarlyExitReason[];
-  onDelete: (reasonId: number) => void;
+  onDelete: (reasonId: string) => void;
 }
 
 export const ReasonsTable: React.FC<ReasonsTableProps> = ({ reasons, onDelete }) => {
@@ -41,7 +41,8 @@ export const ReasonsTable: React.FC<ReasonsTableProps> = ({ reasons, onDelete })
       <Table>
         <TableHead>
           <TableRow>
-            <TableCell>User</TableCell>
+            <TableCell>User ID</TableCell>
+            <TableCell>Attendance ID</TableCell>
             <TableCell>Reason</TableCell>
             <TableCell>Timestamp</TableCell>
             <TableCell align="right">Actions</TableCell>
@@ -50,10 +51,18 @@ export const ReasonsTable: React.FC<ReasonsTableProps> = ({ reasons, onDelete })
         <TableBody>
           {reasons.map((reason) => (
             <TableRow key={reason.id}>
-              <TableCell>{reason.user_name}</TableCell>
+              <TableCell>{reason.user_id}</TableCell>
+              <TableCell>{reason.attendance_id}</TableCell>
               <TableCell>{reason.reason}</TableCell>
               <TableCell>
-                {format(new Date(reason.timestamp), 'MMM dd, yyyy hh:mm a')}
+                {format(
+                  new Date(
+                    typeof reason.timestamp === 'object' && 'iso' in reason.timestamp
+                      ? reason.timestamp.iso as string
+                      : reason.timestamp as string
+                  ), 
+                  'MMM dd, yyyy hh:mm a'
+                )}
               </TableCell>
               <TableCell align="right">
                 <IconButton

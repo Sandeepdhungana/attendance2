@@ -48,7 +48,7 @@ const menuItems = [
 
 const adminItems = [
   { text: 'Office Timings', icon: <AccessTimeIcon />, path: '/office-timings' },
-  // { text: 'Early Exit Reasons', icon: <ExitToAppIcon />, path: '/early-exit-reasons' },
+  { text: 'Early Exit Reasons', icon: <ExitToAppIcon />, path: '/early-exit-reasons' },
   { text: 'Shifts', icon: <ScheduleIcon />, path: '/shifts' },
 ];
 

@@ -4,7 +4,7 @@ import { EarlyExitReason } from '../types/attendance';
 
 interface DeleteDialogState {
   open: boolean;
-  reasonId: number | null;
+  reasonId: string | null;
 }
 
 export const useEarlyExitReasons = () => {
@@ -37,7 +37,7 @@ export const useEarlyExitReasons = () => {
   //   fetchReasons();
   // }, []);
 
-  const handleDeleteClick = (reasonId: number) => {
+  const handleDeleteClick = (reasonId: string) => {
     setDeleteDialog({ open: true, reasonId });
   };
 
