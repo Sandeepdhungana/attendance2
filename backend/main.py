@@ -19,6 +19,7 @@ import time
 import os
 import signal
 import uuid
+import atexit
 
 import models
 import database
@@ -48,7 +49,21 @@ app.add_middleware(
 active_connections = {}
 
 # Create a process pool for image processing
-process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=multiprocessing.cpu_count())
+process_pool = None
+def initialize_process_pool():
+    global process_pool
+    # Close any existing pool
+    if process_pool is not None:
+        try:
+            process_pool.shutdown(wait=False)
+        except:
+            pass
+    # Create a new process pool
+    process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=max(1, multiprocessing.cpu_count() - 1))
+    logger.info(f"Initialized process pool with {max(1, multiprocessing.cpu_count() - 1)} workers")
+
+# Initialize the process pool
+initialize_process_pool()
 
 # Create multiprocessing queues
 manager = Manager()
@@ -130,15 +145,38 @@ if not os.path.exists(IMAGES_DIR):
     logger.info(f"Created images directory: {IMAGES_DIR}")
 
 # Process cleanup handler
-def cleanup_processes():
+def cleanup_processes(signum=None, frame=None):
     """Clean up all processes when the application exits"""
+    logger.info("Cleaning up processes...")
+    global process_pool
+    
+    # Gracefully shutdown the process pool
+    if process_pool is not None:
+        try:
+            process_pool.shutdown(wait=False)
+            logger.info("Process pool shut down")
+        except Exception as e:
+            logger.error(f"Error shutting down process pool: {str(e)}")
+    
+    # Terminate all child processes
     for process in multiprocessing.active_children():
-        process.terminate()
-    process_pool.shutdown(wait=True)
+        try:
+            process.terminate()
+            logger.info(f"Terminated child process PID: {process.pid}")
+        except Exception as e:
+            logger.error(f"Error terminating process {process.pid}: {str(e)}")
+    
+    # If this was called due to a signal, exit
+    if signum is not None:
+        logger.info(f"Exiting due to signal {signum}")
+        os._exit(0)
 
-# Register cleanup handler
-signal.signal(signal.SIGTERM, lambda signum, frame: cleanup_processes())
-signal.signal(signal.SIGINT, lambda signum, frame: cleanup_processes())
+# Register cleanup handler for different signals
+signal.signal(signal.SIGTERM, cleanup_processes)
+signal.signal(signal.SIGINT, cleanup_processes)
+
+# Register cleanup handler to run on exit
+atexit.register(cleanup_processes)
 
 def get_cached_users(db: Session):
     """Get users from cache or database with TTL"""
@@ -187,12 +225,57 @@ async def process_queue():
 
 def handle_future_completion(future, client_id):
     try:
-        processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
+        # Check if the future is done and not cancelled
+        if not future.done() or future.cancelled():
+            logger.warning(f"Future for client {client_id} is not done or was cancelled")
+            with client_pending_tasks_lock:
+                if client_id in client_pending_tasks:
+                    client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+            return
+
+        # Get results, handling any exceptions
+        try:
+            processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
+        except concurrent.futures.process.BrokenProcessPool as e:
+            logger.error(f"Broken process pool detected in future completion: {str(e)}")
+            # Try to recreate the process pool
+            initialize_process_pool()
+            # Notify client of error
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "error": "Server processing error. Please try again."
+            })
+            # Update task counter
+            with client_pending_tasks_lock:
+                if client_id in client_pending_tasks:
+                    client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+            return
+        except Exception as e:
+            logger.error(f"Error getting future result for client {client_id}: {str(e)}")
+            # Notify client of error
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "error": "Error processing image. Please try again."
+            })
+            # Update task counter
+            with client_pending_tasks_lock:
+                if client_id in client_pending_tasks:
+                    client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+            return
 
         # Decrement pending tasks counter
         with client_pending_tasks_lock:
             if client_id in client_pending_tasks:
                 client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+
+        # Check for memory error
+        if no_face_count == 2:  # Memory error code
+            # Notify client
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "error": "Server memory error. Please try with a smaller image."
+            })
+            return
 
         # Put the results in the websocket responses queue
         websocket_responses_queue.put({
@@ -202,23 +285,21 @@ def handle_future_completion(future, client_id):
             "last_recognized_users": last_recognized_users,
             "no_face_count": no_face_count
         })
+
+        # If there were attendance updates, add them to the processing queue
+        if attendance_updates:
+            for update in attendance_updates:
+                processing_results_queue.put({
+                    "type": "attendance_update",
+                    "data": [update]  # Wrap in list for compatibility
+                })
+
     except Exception as e:
-        logger.error(f"Error handling future completion: {str(e)}")
-        # Decrement pending tasks counter even on error
+        logger.error(f"Error in handle_future_completion for client {client_id}: {str(e)}")
+        # Ensure the client's task counter is decremented
         with client_pending_tasks_lock:
             if client_id in client_pending_tasks:
                 client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
-        # Put error in the queue
-        websocket_responses_queue.put({
-            "client_id": client_id,
-            "error": str(e)
-        })
-    finally:
-        # Clean up the future from pending_futures
-        for key, value in list(pending_futures.items()):
-            if value == client_id:
-                del pending_futures[key]
-                break
 
 # Function to process the websocket responses queue
 

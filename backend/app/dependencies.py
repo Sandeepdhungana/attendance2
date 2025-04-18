@@ -6,6 +6,7 @@ import multiprocessing
 import time
 import logging
 from app.models import Employee
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,8 @@ THREAD_WORKERS = CPU_COUNT * 2  # More threads than CPUs for I/O bound tasks
 logger.info(f"System has {CPU_COUNT} CPUs, using {PROCESS_WORKERS} process workers and {THREAD_WORKERS} thread workers")
 
 # Create a process pool for CPU-intensive tasks (face recognition)
+# Use a threading.Lock to control access to process_pool during recreation
+process_pool_lock = threading.Lock()
 process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=PROCESS_WORKERS)
 
 # Create a thread pool for I/O bound tasks (database operations, network calls)
@@ -50,6 +53,37 @@ def get_face_recognition() -> FaceRecognition:
     return face_recognition
 
 def get_process_pool():
+    """
+    Get the current process pool. If the pool is broken, create a new one.
+    """
+    global process_pool
+    
+    with process_pool_lock:
+        try:
+            # Check if the pool is broken by submitting a simple task
+            if hasattr(process_pool, '_broken') and process_pool._broken:
+                logger.warning("Process pool is broken, creating a new one")
+                # Close the old pool (it's already broken, so just clean up)
+                try:
+                    process_pool.shutdown(wait=False)
+                except Exception as e:
+                    logger.warning(f"Error shutting down broken process pool: {str(e)}")
+                
+                # Create a new process pool
+                process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=PROCESS_WORKERS)
+                logger.info("Created new process pool")
+        except Exception as e:
+            logger.error(f"Error checking process pool: {str(e)}")
+            # If we can't check the pool, assume it's broken and create a new one
+            try:
+                process_pool.shutdown(wait=False)
+            except:
+                pass
+            
+            # Create a new process pool
+            process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=PROCESS_WORKERS)
+            logger.info("Created new process pool after error")
+    
     return process_pool
 
 def get_thread_pool():

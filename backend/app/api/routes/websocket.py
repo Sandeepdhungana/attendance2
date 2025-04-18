@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 import os
 from datetime import datetime
+import concurrent.futures
 from app.database import query, create, delete, update
 from app.dependencies import (
     get_process_pool,
@@ -35,6 +36,14 @@ from app.config import IMAGES_DIR, MAX_CONCURRENT_TASKS_PER_CLIENT
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Add function to create a new process pool
+def create_new_process_pool():
+    try:
+        return concurrent.futures.ProcessPoolExecutor()
+    except Exception as e:
+        logger.error(f"Error creating new process pool: {str(e)}")
+        return None
 
 @router.websocket("/ws/attendance")
 async def websocket_endpoint(websocket: WebSocket):
@@ -357,70 +366,122 @@ async def websocket_endpoint(websocket: WebSocket):
                         "message": f"Error registering employee: {str(e)}"
                     })
 
-            elif "image" in data:
-                # Check if client has too many pending tasks
+            elif data.get("type") == "process_image":
+                # Check if we've reached the limit of concurrent tasks for this client
                 with client_pending_tasks_lock:
-                    current_pending = client_pending_tasks.get(client_id, 0)
-                    if current_pending >= MAX_CONCURRENT_TASKS_PER_CLIENT:
+                    if client_pending_tasks[client_id] >= MAX_CONCURRENT_TASKS_PER_CLIENT:
                         await websocket.send_json({
-                            "status": "queued",
-                            "message": f"Processing queue full ({current_pending} tasks). Please wait.",
-                            "timestamp": get_local_time().isoformat()
+                            "status": "error",
+                            "message": "Too many concurrent tasks. Please wait for previous tasks to complete."
                         })
-                        # Don't continue with task submission if we're at capacity
                         continue
-                    client_pending_tasks[client_id] = current_pending + 1
-                    logger.info(f"Increased pending tasks for client {client_id} to {client_pending_tasks[client_id]}")
-
+                    
+                    # Increment the counter for pending tasks
+                    client_pending_tasks[client_id] += 1
+                
                 try:
-                    # Get streaming flag - assume it's real-time streaming if streaming key exists
-                    is_streaming = "streaming" in data and data.get("streaming") is True
+                    # Get the base64 encoded image and decode it
+                    image_data = data.get("image", "").split(",")[-1]
                     entry_type = data.get("entry_type", "entry")
                     
-                    logger.info(f"Processing {'streaming' if is_streaming else 'regular'} image from client {client_id}")
-
-                    # Send confirmation that we received the image and are processing it
-                    await websocket.send_json({
-                        "status": "processing",
-                        "message": "Processing image...",
-                        "timestamp": get_local_time().isoformat(),
-                        "is_streaming": is_streaming
-                    })
-
-                    # Extract and preprocess the image data
-                    image_data = data["image"]
-                    # Remove data URL prefix if present
-                    if "," in image_data:
-                        image_data = image_data.split(",")[1]
-
-                    # Submit image processing to process pool (CPU intensive task)
-                    process_pool = get_process_pool()
-                    future = process_pool.submit(
-                        process_image_in_process,
-                        image_data,
-                        entry_type,
-                        client_id
-                    )
-
-                    # Store the future with client_id
-                    pending_futures = get_pending_futures()
-                    pending_futures[future] = client_id
-
-                    # Add callback for when the future completes
-                    future.add_done_callback(
-                        lambda f: handle_future_completion(f, client_id))
-                
-                except Exception as e:
-                    logger.error(f"Error submitting image processing task: {str(e)}")
-                    # If there was an error submitting the task, decrement the counter
-                    with client_pending_tasks_lock:
-                        if client_id in client_pending_tasks:
-                            client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
+                    # Decode base64 image
+                    img_bytes = base64.b64decode(image_data)
+                    nparr = np.frombuffer(img_bytes, np.uint8)
+                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     
-                    # Send error response to client
+                    # Save the image for debugging (optional)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    image_path = os.path.join(IMAGES_DIR, f"{client_id}_{timestamp}.jpg")
+                    cv2.imwrite(image_path, img)
+                    
+                    # Get process pool executor
+                    process_pool = get_process_pool()
+                    
+                    # Check if process pool is usable
+                    if process_pool is None or process_pool._broken:
+                        logger.warning("Process pool is broken or None, creating a new one")
+                        process_pool = create_new_process_pool()
+                        
+                        # If we couldn't create a new pool, return an error
+                        if process_pool is None:
+                            logger.error("Failed to create a new process pool")
+                            await websocket.send_json({
+                                "status": "error",
+                                "message": "Server processing error. Please try again later."
+                            })
+                            
+                            # Decrement the counter for pending tasks
+                            with client_pending_tasks_lock:
+                                client_pending_tasks[client_id] -= 1
+                                
+                            continue
+
+                    # Submit the task to the process pool
+                    try:
+                        future = process_pool.submit(
+                            process_image_in_process,
+                            img,
+                            entry_type,
+                            client_id
+                        )
+                        
+                        # Store the future in pending futures
+                        pending_futures = get_pending_futures()
+                        pending_futures[future] = client_id
+                        
+                        # Add a callback to handle the future's completion
+                        future.add_done_callback(lambda f: handle_future_completion(f, client_id))
+                        
+                        logger.info(f"Submitted image processing task for client {client_id}")
+                    except Exception as e:
+                        # Handle broken process pool
+                        logger.error(f"Error submitting image processing task: {str(e)}")
+                        
+                        # Try to create a new process pool
+                        if "process pool is not usable anymore" in str(e):
+                            logger.warning("Attempting to create a new process pool")
+                            process_pool = create_new_process_pool()
+                            
+                            # If we successfully created a new pool, try again
+                            if process_pool is not None:
+                                try:
+                                    future = process_pool.submit(
+                                        process_image_in_process,
+                                        img,
+                                        entry_type,
+                                        client_id
+                                    )
+                                    
+                                    # Store the future in pending futures
+                                    pending_futures = get_pending_futures()
+                                    pending_futures[future] = client_id
+                                    
+                                    # Add a callback to handle the future's completion
+                                    future.add_done_callback(lambda f: handle_future_completion(f, client_id))
+                                    
+                                    logger.info(f"Resubmitted image processing task for client {client_id} with new process pool")
+                                    continue
+                                except Exception as e2:
+                                    logger.error(f"Error resubmitting task with new process pool: {str(e2)}")
+                        
+                        # Decrement the counter for pending tasks
+                        with client_pending_tasks_lock:
+                            client_pending_tasks[client_id] -= 1
+                            
+                        await websocket.send_json({
+                            "status": "error",
+                            "message": "Error processing image. Please try again."
+                        })
+                except Exception as e:
+                    logger.error(f"Error processing image: {str(e)}")
+                    
+                    # Decrement the counter for pending tasks
+                    with client_pending_tasks_lock:
+                        client_pending_tasks[client_id] -= 1
+                        
                     await websocket.send_json({
                         "status": "error",
-                        "message": f"Error processing image: {str(e)}"
+                        "message": "Error processing image. Please try again."
                     })
 
             elif data.get("type") == "ping":

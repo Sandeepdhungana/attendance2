@@ -269,43 +269,72 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
 
     return result
 
-def process_image_in_process(image_data: str, entry_type: str, client_id: str):
+def process_image_in_process(image_data, entry_type: str, client_id: str):
     """Process image in a separate process - enhanced for real-time streaming with confidence information"""
     try:
-        # image_data should already have the data URL prefix removed in the websocket endpoint
-        # But let's double-check
-        if "," in image_data:
-            image_data = image_data.split(",")[1]
+        # If image_data is already a numpy array, use it directly
+        if isinstance(image_data, np.ndarray):
+            img = image_data
+        else:
+            # image_data should already have the data URL prefix removed in the websocket endpoint
+            # But let's double-check
+            if "," in image_data:
+                image_data = image_data.split(",")[1]
 
-        # Decode base64 to bytes
-        image_bytes = base64.b64decode(image_data)
+            # Decode base64 to bytes
+            image_bytes = base64.b64decode(image_data)
 
-        # Convert to numpy array
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            # Convert to numpy array
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if img is None:
             logger.error(f"Failed to decode image for client {client_id}")
             return [], [], {}, 0
 
+        # Resize image if it's too large to reduce memory usage
+        h, w = img.shape[:2]
+        max_dimension = 1024
+        if h > max_dimension or w > max_dimension:
+            logger.info(f"Resizing large image ({w}x{h}) for client {client_id}")
+            scale = max_dimension / max(h, w)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = cv2.resize(img, (new_w, new_h))
+            logger.info(f"Resized image to {new_w}x{new_h}")
+
         # Get all face embeddings from the image
-        face_recognition = get_face_recognition()
-        face_embeddings = face_recognition.get_embeddings(img)
-        if not face_embeddings:
-            logger.info(f"No faces detected in image from client {client_id}")
-            return [], [], {}, 1
+        try:
+            face_recognition = get_face_recognition()
+            face_embeddings = face_recognition.get_embeddings(img)
+            if not face_embeddings:
+                logger.info(f"No faces detected in image from client {client_id}")
+                return [], [], {}, 1
+        except MemoryError as me:
+            logger.error(f"Memory error during face detection for client {client_id}: {str(me)}")
+            # Return a specific error code for memory issues
+            return [], [], {}, 2
+        except Exception as e:
+            logger.error(f"Error during face detection for client {client_id}: {str(e)}")
+            return [], [], {}, 0
 
         # Get all employees from the database
-        employees = db_query("Employee")
-        if not employees:
-            logger.warning("No employees found in database")
+        try:
+            employees = db_query("Employee")
+            if not employees:
+                logger.warning("No employees found in database")
+                return [], [], {}, 0
+        except Exception as e:
+            logger.error(f"Error querying employees for client {client_id}: {str(e)}")
             return [], [], {}, 0
 
         # Find matches for all detected faces
-        matches = face_recognition.find_matches_for_embeddings(face_embeddings, employees)
-
-        if not matches:
-            logger.info(f"No matching employees found for client {client_id}")
+        try:
+            matches = face_recognition.find_matches_for_embeddings(face_embeddings, employees)
+            if not matches:
+                logger.info(f"No matching employees found for client {client_id}")
+                return [], [], {}, 0
+        except Exception as e:
+            logger.error(f"Error finding matches for client {client_id}: {str(e)}")
             return [], [], {}, 0
 
         # Process each matched employee
@@ -333,25 +362,33 @@ def process_image_in_process(image_data: str, entry_type: str, client_id: str):
             }
 
             # Process attendance using shared function
-            result = process_attendance_for_employee(employee, similarity, entry_type)
-            
-            if result["processed_employee"]:
-                # Add additional data helpful for real-time display
-                processed_employee = result["processed_employee"]
-                processed_employee["similarity_percent"] = similarity_percent
-                processed_employee["detection_time"] = current_time.isoformat()
-                processed_employee["is_streaming"] = True
+            try:
+                result = process_attendance_for_employee(employee, similarity, entry_type)
                 
-                processed_employees.append(processed_employee)
-            
-            if result["attendance_update"]:
-                # Add additional confidence information
-                result["attendance_update"]["confidence_percent"] = similarity_percent
-                result["attendance_update"]["detection_time"] = current_time.isoformat()
-                attendance_updates.append(result["attendance_update"])
+                if result["processed_employee"]:
+                    # Add additional data helpful for real-time display
+                    processed_employee = result["processed_employee"]
+                    processed_employee["similarity_percent"] = similarity_percent
+                    processed_employee["detection_time"] = current_time.isoformat()
+                    processed_employee["is_streaming"] = True
+                    
+                    processed_employees.append(processed_employee)
+                
+                if result["attendance_update"]:
+                    # Add additional confidence information
+                    result["attendance_update"]["confidence_percent"] = similarity_percent
+                    result["attendance_update"]["detection_time"] = current_time.isoformat()
+                    attendance_updates.append(result["attendance_update"])
+            except Exception as e:
+                logger.error(f"Error processing attendance for employee {employee.get('employee_id')}: {str(e)}")
+                continue
 
         return processed_employees, attendance_updates, last_recognized_employees, 0
 
+    except MemoryError as me:
+        logger.error(f"Memory error processing image for client {client_id}: {str(me)}")
+        # Return a specific error code for memory issues
+        return [], [], {}, 2
     except Exception as e:
         logger.error(f"Error processing image for client {client_id}: {str(e)}")
         return [], [], {}, 0 
