@@ -3,14 +3,12 @@ from datetime import datetime
 import pytz
 
 # Back4App Parse API configuration
-APPLICATION_ID = "VXlRAyM9B1ejoZuMmMthHVZgaWs0WJf4s9AIN0Be"
-REST_API_KEY = "6dALgL7Y4M8qwqAZewdQZBGRKP2DdD9TgXL64qTa"
-BASE_URL = "https://parseapi.back4app.com/classes"
+from app.config import BACK4APP_APPLICATION_ID, BACK4APP_REST_API_KEY, BACK4APP_SERVER_URL
 
 # Headers for all requests
 HEADERS = {
-    "X-Parse-Application-Id": APPLICATION_ID,
-    "X-Parse-REST-API-Key": REST_API_KEY,
+    "X-Parse-Application-Id": BACK4APP_APPLICATION_ID,
+    "X-Parse-REST-API-Key": BACK4APP_REST_API_KEY,
     "Content-Type": "application/json"
 }
 
@@ -28,7 +26,7 @@ def get_local_time():
 class BaseModel:
     def __init__(self, class_name):
         self.class_name = class_name
-        self.base_url = f"{BASE_URL}/{class_name}"
+        self.base_url = f"{BACK4APP_SERVER_URL}/{class_name}"
 
     def create(self, data):
         response = requests.post(self.base_url, headers=HEADERS, json=data)
