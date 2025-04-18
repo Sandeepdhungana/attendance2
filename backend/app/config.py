@@ -1,5 +1,9 @@
 import os
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # WebSocket settings
 PING_INTERVAL = 30  # seconds
@@ -16,15 +20,15 @@ if not os.path.exists(IMAGES_DIR):
     os.makedirs(IMAGES_DIR)
 
 # Back4App settings
-BACK4APP_APPLICATION_ID = "VXlRAyM9B1ejoZuMmMthHVZgaWs0WJf4s9AIN0Be"
-BACK4APP_REST_API_KEY = "6dALgL7Y4M8qwqAZewdQZBGRKP2DdD9TgXL64qTa"
-BACK4APP_MASTER_KEY = "78CsqfmbtuWHclu8gnJuuip0VcgCnkeRboZz8m1x"
-BACK4APP_SERVER_URL = "https://parseapi.back4app.com"
+BACK4APP_APPLICATION_ID = os.getenv("BACK4APP_APPLICATION_ID")
+BACK4APP_REST_API_KEY = os.getenv("BACK4APP_REST_API_KEY")
+BACK4APP_MASTER_KEY = os.getenv("BACK4APP_MASTER_KEY")
+BACK4APP_SERVER_URL = os.getenv("BACK4APP_SERVER_URL", "https://parseapi.back4app.com")
 
-
-SENDPULSE_API_URL = "https://api.sendpulse.com"
-SENDPULSE_CLIENT_ID = "e6166297e5fa0df74a742b1f8d6c0fa1"
-SENDPULSE_CLIENT_SECRET = "4ebf9af5bc18d5eb74eb6309f99226f7"
+# SendPulse settings
+SENDPULSE_API_URL = os.getenv("SENDPULSE_API_URL", "https://api.sendpulse.com")
+SENDPULSE_CLIENT_ID = os.getenv("SENDPULSE_CLIENT_ID")
+SENDPULSE_CLIENT_SECRET = os.getenv("SENDPULSE_CLIENT_SECRET")
 
 # Face recognition settings
-FACE_RECOGNITION_THRESHOLD = 0.6  # Minimum similarity score for face recognition 
+FACE_RECOGNITION_THRESHOLD = float(os.getenv("FACE_RECOGNITION_THRESHOLD", "0.6")) 
