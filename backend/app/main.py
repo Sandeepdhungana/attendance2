@@ -1,4 +1,3 @@
-from fastapi import FastAPI
 from . import create_app
 from .api import router as api_router
 from .api.routes import attendance, employees, office_timings, timezone, websocket
@@ -8,8 +7,6 @@ from .database import query, create, create_class_schema
 from .utils.time_utils import get_local_time
 import asyncio
 import logging
-import signal
-import multiprocessing
 from app.models import Employee, Attendance, OfficeTiming, Shift, TimezoneConfig
 from fastapi.middleware.cors import CORSMiddleware
 
