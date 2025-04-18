@@ -31,20 +31,34 @@ async def broadcast_attendance_update(attendance_data: Dict[str, Any]):
         logger.info("No active connections to broadcast to")
         return
 
-    # Ensure objectId is included if this is a deletion
-    if attendance_data.get("action") == "delete" and "objectId" not in attendance_data:
-        logger.warning("Missing objectId in delete attendance update")
-        if "attendance_id" in attendance_data:
-            attendance_data["objectId"] = attendance_data["attendance_id"]
-
+    # Check if this is a list or a single item
+    if isinstance(attendance_data, list):
+        data_list = attendance_data
+    else:
+        data_list = [attendance_data]
+    
+    # Don't broadcast streaming detections - they're only for the requesting client
+    non_streaming_updates = []
+    for data in data_list:
+        if not data.get("is_streaming", False):
+            # Ensure objectId is included if this is a deletion
+            if data.get("action") == "delete" and "objectId" not in data:
+                logger.warning("Missing objectId in delete attendance update")
+                if "attendance_id" in data:
+                    data["objectId"] = data["attendance_id"]
+            non_streaming_updates.append(data)
+    
+    if not non_streaming_updates:
+        return
+    
     # Create a message with the attendance update
     message = {
         "type": "attendance_update",
-        "data": attendance_data
+        "data": non_streaming_updates if len(non_streaming_updates) > 1 else non_streaming_updates[0]
     }
 
     # Log the broadcast
-    logger.info(f"Broadcasting attendance update to {len(active_connections)} clients: {attendance_data}")
+    logger.info(f"Broadcasting attendance update to {len(active_connections)} clients: {non_streaming_updates}")
 
     # Send to all connected clients using gather to process in parallel
     send_tasks = []
@@ -132,9 +146,51 @@ async def process_websocket_responses():
                 websocket = active_connections[client_id]
                 
                 # Handle real-time detection messages
-                if item.get("type") == "real_time_detection":
-                    logger.info(f"Sending real-time detection to client {client_id}: {item.get('name', 'Unknown')} - {item.get('confidence_str', '0%')}")
-                    await _send_message_to_client(websocket, item, client_id)
+                if item.get("type") == "real_time_detection" or (item.get("processed_users") and any(user.get("is_streaming", False) for user in item.get("processed_users", []))):
+                    # This is a streaming response
+                    is_streaming = True
+                    
+                    # Extract processed users for streaming format
+                    processed_users = item.get("processed_users", [])
+                    streaming_users = []
+                    
+                    for user in processed_users:
+                        # Format for streaming
+                        similarity_percent = user.get("similarity_percent", user.get("similarity", 0) * 100)
+                        streaming_users.append({
+                            "name": user.get("name"),
+                            "employee_id": user.get("employee_id", user.get("user_id")),
+                            "similarity_percent": similarity_percent,
+                            "confidence_str": f"{similarity_percent}%",
+                            "detection_time": user.get("detection_time", get_local_time().isoformat()),
+                            "is_streaming": True
+                        })
+                    
+                    if streaming_users:
+                        logger.info(f"Sending streaming response to client {client_id}: {len(streaming_users)} users detected")
+                        await _send_message_to_client(
+                            websocket, 
+                            {
+                                "multiple_users": True,
+                                "users": streaming_users,
+                                "is_streaming": True
+                            },
+                            client_id
+                        )
+                    else:
+                        if item.get("no_face_count", 0) > 0:
+                            await _send_message_to_client(
+                                websocket,
+                                {"status": "no_face_detected", "is_streaming": True},
+                                client_id
+                            )
+                        else:
+                            await _send_message_to_client(
+                                websocket,
+                                {"status": "no_matching_users", "is_streaming": True},
+                                client_id
+                            )
+                    
                     websocket_responses_queue.task_done()
                     continue
                 
@@ -169,6 +225,7 @@ async def process_websocket_responses():
                 # Process the results
                 processed_users = item["processed_users"]
                 attendance_updates = item["attendance_updates"]
+                last_recognized_users = item.get("last_recognized_users", {})
 
                 if not processed_users:
                     if item["no_face_count"] > 0:
@@ -198,32 +255,13 @@ async def process_websocket_responses():
                     success = await _send_message_to_client(
                         websocket,
                         {
-                            "type": "detection_result",
-                            "multiple_users": len(processed_users) > 1,
-                            "users": processed_users,
-                            "timestamp": get_local_time().isoformat()
+                            "multiple_users": True,
+                            "users": processed_users
                         },
                         client_id
                     )
-                    
-                    # Send individual notifications for successful face detections
-                    # (This is a backup - real-time notifications should have already been sent in handle_future_completion)
-                    for user in processed_users:
-                        confidence = user.get('similarity', 0)
-                        # Format confidence as percentage
-                        confidence_str = f"{user.get('similarity_percent', confidence)}%"
-                        
-                        notification_msg = f"Detected: {user.get('name', 'Unknown')} (ID: {user.get('employee_id', 'Unknown')}) - Confidence: {confidence_str}"
-                        status_type = "success" if confidence >= 0.7 else "warning"  # Warning for lower confidence matches
-                        await send_notification(websocket, notification_msg, status_type, client_id)
-                    
                     if not success and client_id in active_connections:
                         del active_connections[client_id]
-
-                    # Add attendance updates to the queue for broadcasting
-                    if attendance_updates:
-                        for update in attendance_updates:
-                            await broadcast_attendance_update(update)
 
                 # Mark the task as done
                 websocket_responses_queue.task_done()

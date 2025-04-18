@@ -277,17 +277,21 @@ def handle_future_completion(future, client_id):
             })
             return
 
+        # Check if this is a streaming detection (any user has is_streaming=True)
+        is_streaming = any(user.get("is_streaming", False) for user in processed_users)
+        
         # Put the results in the websocket responses queue
         websocket_responses_queue.put({
             "client_id": client_id,
             "processed_users": processed_users,
             "attendance_updates": attendance_updates,
             "last_recognized_users": last_recognized_users,
-            "no_face_count": no_face_count
+            "no_face_count": no_face_count,
+            "is_streaming": is_streaming
         })
 
-        # If there were attendance updates, add them to the processing queue
-        if attendance_updates:
+        # If there were attendance updates and not streaming, add them to the processing queue
+        if attendance_updates and not is_streaming:
             for update in attendance_updates:
                 processing_results_queue.put({
                     "type": "attendance_update",

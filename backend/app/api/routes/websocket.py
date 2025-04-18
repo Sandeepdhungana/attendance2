@@ -487,6 +487,195 @@ async def websocket_endpoint(websocket: WebSocket):
             elif data.get("type") == "ping":
                 # Respond to ping
                 await websocket.send_json({"type": "pong"})
+                
+            elif data.get("type") == "streaming_image" or "image" in data and data.get("streaming", False):
+                # Handle streaming images - these need faster processing with less overhead
+                # Check if client has too many pending tasks
+                with client_pending_tasks_lock:
+                    if client_pending_tasks[client_id] >= MAX_CONCURRENT_TASKS_PER_CLIENT:
+                        await websocket.send_json({
+                            "status": "queued",
+                            "message": f"Processing queue full. Please wait.",
+                            "timestamp": get_local_time().isoformat()
+                        })
+                        continue
+                    
+                    # Increment the counter for pending tasks
+                    client_pending_tasks[client_id] += 1
+                
+                try:
+                    # Send confirmation that we received the image and are processing it
+                    await websocket.send_json({
+                        "status": "processing",
+                        "message": "Processing image...",
+                        "timestamp": get_local_time().isoformat(),
+                        "is_streaming": True
+                    })
+                    
+                    # Get the base64 encoded image
+                    image_data = data.get("image", "")
+                    if "," in image_data:
+                        image_data = image_data.split(",")[1]
+                        
+                    entry_type = data.get("entry_type", "entry")
+                    
+                    # Decode base64 image
+                    img_bytes = base64.b64decode(image_data)
+                    nparr = np.frombuffer(img_bytes, np.uint8)
+                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    
+                    if img is None:
+                        logger.error(f"Failed to decode streaming image for client {client_id}")
+                        await websocket.send_json({
+                            "status": "error",
+                            "message": "Failed to decode image"
+                        })
+                        
+                        # Decrement the counter for pending tasks
+                        with client_pending_tasks_lock:
+                            client_pending_tasks[client_id] -= 1
+                            
+                        continue
+                    
+                    # Get process pool executor
+                    process_pool = get_process_pool()
+                    
+                    # Check if process pool is usable
+                    if process_pool is None or process_pool._broken:
+                        logger.warning("Process pool is broken or None during streaming, creating a new one")
+                        process_pool = create_new_process_pool()
+                        
+                        # If we couldn't create a new pool, handle locally
+                        if process_pool is None:
+                            logger.error("Failed to create a new process pool for streaming, using local processing")
+                            # Use the face recognition object directly
+                            face_recognition = get_face_recognition()
+                            
+                            # Get face embeddings
+                            face_embeddings = face_recognition.get_embeddings(img)
+                            if not face_embeddings:
+                                await websocket.send_json({
+                                    "status": "no_face_detected"
+                                })
+                                
+                                # Decrement the counter for pending tasks
+                                with client_pending_tasks_lock:
+                                    client_pending_tasks[client_id] -= 1
+                                    
+                                continue
+                            
+                            # Get employees
+                            employees = get_cached_employees()
+                            
+                            # Find matches
+                            matches = face_recognition.find_matches_for_embeddings(face_embeddings, employees)
+                            if not matches:
+                                await websocket.send_json({
+                                    "status": "no_matching_users"
+                                })
+                                
+                                # Decrement the counter for pending tasks
+                                with client_pending_tasks_lock:
+                                    client_pending_tasks[client_id] -= 1
+                                    
+                                continue
+                            
+                            # Process each match
+                            processed_employees = []
+                            for match in matches:
+                                employee = match['employee']
+                                similarity = match['similarity']
+                                
+                                # Format for streaming
+                                similarity_percent = round(similarity * 100, 1)
+                                processed_employees.append({
+                                    "name": employee.get("name"),
+                                    "employee_id": employee.get("employee_id"),
+                                    "similarity_percent": similarity_percent,
+                                    "confidence_str": f"{similarity_percent}%",
+                                    "detection_time": get_local_time().isoformat(),
+                                    "is_streaming": True
+                                })
+                            
+                            await websocket.send_json({
+                                "multiple_users": True,
+                                "users": processed_employees,
+                                "is_streaming": True
+                            })
+                            
+                            # Decrement the counter for pending tasks
+                            with client_pending_tasks_lock:
+                                client_pending_tasks[client_id] -= 1
+                                
+                            continue
+                    
+                    # Submit the task to the process pool
+                    try:
+                        future = process_pool.submit(
+                            process_image_in_process,
+                            img,  # Pass numpy array directly
+                            entry_type,
+                            client_id
+                        )
+                        
+                        # Store the future in pending futures
+                        pending_futures = get_pending_futures()
+                        pending_futures[future] = client_id
+                        
+                        # Add a callback to handle the future's completion
+                        future.add_done_callback(lambda f: handle_future_completion(f, client_id))
+                        
+                        logger.info(f"Submitted streaming image processing task for client {client_id}")
+                    except Exception as e:
+                        # Handle broken process pool
+                        logger.error(f"Error submitting streaming image processing task: {str(e)}")
+                        
+                        # Try to create a new process pool
+                        if "process pool is not usable anymore" in str(e):
+                            logger.warning("Attempting to create a new process pool for streaming")
+                            process_pool = create_new_process_pool()
+                            
+                            # If we successfully created a new pool, try again
+                            if process_pool is not None:
+                                try:
+                                    future = process_pool.submit(
+                                        process_image_in_process,
+                                        img,
+                                        entry_type,
+                                        client_id
+                                    )
+                                    
+                                    # Store the future in pending futures
+                                    pending_futures = get_pending_futures()
+                                    pending_futures[future] = client_id
+                                    
+                                    # Add a callback to handle the future's completion
+                                    future.add_done_callback(lambda f: handle_future_completion(f, client_id))
+                                    
+                                    logger.info(f"Resubmitted streaming image processing task for client {client_id} with new process pool")
+                                    continue
+                                except Exception as e2:
+                                    logger.error(f"Error resubmitting streaming task with new process pool: {str(e2)}")
+                        
+                        # Decrement the counter for pending tasks
+                        with client_pending_tasks_lock:
+                            client_pending_tasks[client_id] -= 1
+                            
+                        await websocket.send_json({
+                            "status": "error",
+                            "message": "Error processing image. Please try again."
+                        })
+                except Exception as e:
+                    logger.error(f"Error processing streaming image: {str(e)}")
+                    
+                    # Decrement the counter for pending tasks
+                    with client_pending_tasks_lock:
+                        client_pending_tasks[client_id] -= 1
+                        
+                    await websocket.send_json({
+                        "status": "error",
+                        "message": "Error processing image. Please try again."
+                    })
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket connection {client_id} closed")
