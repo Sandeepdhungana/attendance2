@@ -21,20 +21,11 @@ import { OfficeTiming } from '../types/officeTimings';
 
 const OfficeTimings: React.FC = () => {
   const {
-    timings,
-    loading,
     error,
     currentTimezone,
-    handleAddTiming,
     handleTimezoneChange,
-    newTiming,
-    setNewTiming,
   } = useOfficeTimings();
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    handleAddTiming();
-  };
 
   return (
     <Container maxWidth="lg">
@@ -84,100 +75,6 @@ const OfficeTimings: React.FC = () => {
             <TimezoneSelector
               currentTimezone={currentTimezone}
               onTimezoneChange={handleTimezoneChange}
-            />
-          </CardContent>
-        </Card>
-
-        <Card 
-          elevation={2}
-          sx={{ 
-            mb: 4,
-            borderRadius: 2,
-            overflow: 'hidden'
-          }}
-        >
-          <CardHeader 
-            title="Add New Timing"
-            titleTypographyProps={{
-              variant: 'h6',
-              fontWeight: 600
-            }}
-          />
-          <Divider />
-          <CardContent>
-            <form onSubmit={handleSubmit}>
-              <Grid container spacing={3} alignItems="center">
-                <Grid item xs={12} sm={5}>
-                  <TextField
-                    fullWidth
-                    label="Login Time"
-                    type="time"
-                    value={newTiming.login_time}
-                    onChange={(e) => setNewTiming(prev => ({ ...prev, login_time: e.target.value }))}
-                    InputLabelProps={{
-                      shrink: true,
-                    }}
-                    inputProps={{
-                      step: 300, // 5 min
-                    }}
-                    size="medium"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={5}>
-                  <TextField
-                    fullWidth
-                    label="Logout Time"
-                    type="time"
-                    value={newTiming.logout_time}
-                    onChange={(e) => setNewTiming(prev => ({ ...prev, logout_time: e.target.value }))}
-                    InputLabelProps={{
-                      shrink: true,
-                    }}
-                    inputProps={{
-                      step: 300, // 5 min
-                    }}
-                    size="medium"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={2}>
-                  <Button
-                    type="submit"
-                    variant="contained"
-                    color="primary"
-                    fullWidth
-                    disabled={loading}
-                    sx={{
-                      height: '100%',
-                      py: 1.5
-                    }}
-                  >
-                    Add
-                  </Button>
-                </Grid>
-              </Grid>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card 
-          elevation={2}
-          sx={{ 
-            borderRadius: 2,
-            overflow: 'hidden'
-          }}
-        >
-          <CardHeader 
-            title="Office Timings List"
-            titleTypographyProps={{
-              variant: 'h6',
-              fontWeight: 600
-            }}
-          />
-          <Divider />
-          <CardContent>
-            <TimingsTable
-              timings={timings}
-              loading={loading}
             />
           </CardContent>
         </Card>

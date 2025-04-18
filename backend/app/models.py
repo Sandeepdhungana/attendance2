@@ -89,8 +89,6 @@ class Attendance(BaseModel):
 class OfficeTiming(BaseModel):
     def __init__(self):
         super().__init__("OfficeTiming")
-        self.created_at = get_local_time()
-        self.updated_at = get_local_time()
 
 class EarlyExitReason(BaseModel):
     def __init__(self):
@@ -102,11 +100,7 @@ class TimezoneConfig(BaseModel):
         super().__init__("TimezoneConfig")
         self.timezone_name = 'Asia/Kolkata'
         self.timezone_offset = '+05:30'
-        self.created_at = get_local_time()
-        self.updated_at = get_local_time()
 
 class Shift(BaseModel):
     def __init__(self):
-        super().__init__("Shift")
-        self.created_at = get_local_time()
-        self.updated_at = get_local_time() 
+        super().__init__("Shift") 

@@ -93,43 +93,40 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                 login_time_str = shift.get("login_time")
                 login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
                 
+                # Get grace period from shift (default to 0 if not set)
+                grace_period = shift.get("grace_period", 60)
+                
                 # Convert login_time to timezone-aware datetime for today
                 login_time = datetime.combine(today, 
                                             datetime.min.time().replace(hour=login_time_hours, 
                                                                         minute=login_time_minutes))
                 login_time = convert_to_local_time(login_time)
                 
-                # Calculate the grace period end time (1 hour after login time or use configured grace period)
-                grace_period_minutes = shift.get("grace_period_minutes", 1)  # Default 60 minutes if not specified
-                grace_period_end = login_time + timedelta(hours=grace_period_minutes)
+                # Add grace period to login time
+                login_time_with_grace = login_time + timedelta(minutes=grace_period)
                 
-                # Mark as late if entry is after grace period
-                if current_time > grace_period_end:
+                logger.info(f"Login time: {login_time}")
+                logger.info(f"Grace period: {grace_period} minutes")
+                logger.info(f"Login time with grace: {login_time_with_grace}")
+                logger.info(f"Current time: {current_time}")
+                
+                # Check if the current time is after the login time + grace period
+                if current_time > login_time_with_grace:
                     is_late = True
-                    time_diff = current_time - login_time
-                    total_seconds = int(time_diff.total_seconds())
-                    hours_late = total_seconds // 3600
-                    minutes_late = (total_seconds % 3600) // 60
-                    seconds_late = total_seconds % 60
-                    
-                    # Format the time components for display
-                    time_late_str = ""
-                    if hours_late > 0:
-                        time_late_str += f"{hours_late} hours, "
-                    if minutes_late > 0 or hours_late > 0:
-                        time_late_str += f"{minutes_late} minutes, "
-                    time_late_str += f"{seconds_late} seconds"
-                    
-                    # Store total minutes for database consistency
-                    minutes_late_total = int(total_seconds / 60)
-                    
-                    late_message = f"Late arrival: {current_time.strftime('%H:%M:%S')} ({time_late_str} late, Shift time: {login_time.strftime('%H:%M')}, Grace period: {grace_period_end.strftime('%H:%M')})"
+                    late_minutes = int((current_time - login_time).total_seconds() / 60)
+                    time_components = {
+                        "hours": late_minutes // 60,
+                        "minutes": late_minutes % 60,
+                        "seconds": int((current_time - login_time).total_seconds()) % 60
+                    }
+                    late_message = f"Late by {late_minutes} minutes (Shift start time: {login_time.strftime('%H:%M')})"
 
         # Create new attendance record
         new_attendance_data = {
             "employee_id": employee.get("employee_id"),
             "confidence": round(similarity, 2),
             "is_late": is_late,
+            "late_message": late_message if is_late else None,
             "timestamp": {
                 "__type": "Date",
                 "iso": current_time.isoformat()
@@ -142,16 +139,13 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                 "__type": "Pointer",
                 "className": "Employee",
                 "objectId": employee.get("objectId")
-            }
+            },
+            "is_early_exit": False,
+            "entry_time": current_time.isoformat(),
+            "exit_time": None,
+            "minutes_late": late_minutes if is_late else None,
+            "time_components": time_components if is_late else None
         }
-        
-        # Add late arrival details if applicable
-        # if is_late:
-        #     new_attendance_data["minutes_late"] = minutes_late_total
-        #     new_attendance_data["hours_late"] = hours_late
-        #     new_attendance_data["minutes_component"] = minutes_late
-        #     new_attendance_data["seconds_late"] = seconds_late
-        #     new_attendance_data["late_message"] = late_message
         
         create("Attendance", new_attendance_data)
         send_message_by_phone(bot_id="67ff97f2dccc60523807cffd", phone=971524472456, message_text="Welcome to Zainlee, Your attendance has been marked")
@@ -160,8 +154,8 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         message = "Entry marked successfully"
         if is_late:
             message += f" - {late_message}"
-        elif login_time and grace_period_end:
-            message += f" - On time (Shift time: {login_time.strftime('%H:%M')}, Grace period until: {grace_period_end.strftime('%H:%M')})"
+        elif login_time:
+            message += f" - On time (Shift start time: {login_time.strftime('%H:%M')})"
 
         # Format similarity to 2 decimal places
         rounded_similarity = round(similarity, 2)
@@ -176,12 +170,8 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
             "late_message": late_message,
             "entry_time": current_time.isoformat(),
             "exit_time": None,
-            "minutes_late": minutes_late_total if is_late else None,
-            "time_components": {
-                "hours": hours_late,
-                "minutes": minutes_late,
-                "seconds": seconds_late
-            } if is_late else None
+            "minutes_late": minutes_late if is_late else None,
+            "time_components": time_components if is_late else None
         }
 
         result["processed_employee"] = {**attendance_data, "message": message}

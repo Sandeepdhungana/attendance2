@@ -25,7 +25,7 @@ import {
   MenuItem,
   Chip,
 } from '@mui/material';
-import { Delete as DeleteIcon, Edit as EditIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Edit as EditIcon, Group as GroupIcon } from '@mui/icons-material';
 import api from '../api/config';
 
 interface Shift {
@@ -33,6 +33,7 @@ interface Shift {
   name: string;
   login_time: string;
   logout_time: string;
+  grace_period?: number;
 }
 
 interface Employee {
@@ -52,6 +53,7 @@ export default function Shifts() {
     name: '',
     login_time: '',
     logout_time: '',
+    grace_period: 15,
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -62,6 +64,24 @@ export default function Shifts() {
   const [assignDialog, setAssignDialog] = useState<{ open: boolean; shiftId: string | null }>({
     open: false,
     shiftId: null,
+  });
+  const [editDialog, setEditDialog] = useState<{ 
+    open: boolean; 
+    shift: Shift | null 
+  }>({
+    open: false,
+    shift: null,
+  });
+  const [editedShift, setEditedShift] = useState<{
+    name: string;
+    login_time: string;
+    logout_time: string;
+    grace_period: number;
+  }>({
+    name: '',
+    login_time: '',
+    logout_time: '',
+    grace_period: 0,
   });
   const [selectedEmployee, setSelectedEmployee] = useState<string>('');
 
@@ -103,7 +123,7 @@ export default function Shifts() {
     try {
       await api.post('/shifts', newShift);
       setSuccess('Shift created successfully');
-      setNewShift({ name: '', login_time: '', logout_time: '' });
+      setNewShift({ name: '', login_time: '', logout_time: '', grace_period: 15 });
       fetchShifts();
     } catch (error) {
       setError('Failed to create shift');
@@ -139,6 +159,33 @@ export default function Shifts() {
     } catch (error) {
       setError('Failed to assign shift');
       console.error('Error assigning shift:', error);
+    }
+  };
+
+  const handleEdit = (shift: Shift) => {
+    setEditedShift({
+      name: shift.name,
+      login_time: shift.login_time,
+      logout_time: shift.logout_time,
+      grace_period: shift.grace_period || 0,
+    });
+    setEditDialog({
+      open: true,
+      shift: shift,
+    });
+  };
+
+  const handleUpdateShift = async () => {
+    if (!editDialog.shift) return;
+
+    try {
+      await api.put(`/shifts/${editDialog.shift.objectId}`, editedShift);
+      setSuccess('Shift updated successfully');
+      setEditDialog({ open: false, shift: null });
+      fetchShifts();
+    } catch (error) {
+      setError('Failed to update shift');
+      console.error('Error updating shift:', error);
     }
   };
 
@@ -195,6 +242,15 @@ export default function Shifts() {
                 inputProps={{ step: 300 }}
                 required
               />
+              <TextField
+                label="Grace Period (minutes)"
+                type="number"
+                value={newShift.grace_period}
+                onChange={(e) => setNewShift({ ...newShift, grace_period: parseInt(e.target.value) || 0 })}
+                InputLabelProps={{ shrink: true }}
+                inputProps={{ min: 0, max: 60, step: 5 }}
+                required
+              />
             </Box>
             <Button type="submit" variant="contained">
               Add Shift
@@ -215,6 +271,7 @@ export default function Shifts() {
                   <TableCell>Shift Name</TableCell>
                   <TableCell>Login Time</TableCell>
                   <TableCell>Logout Time</TableCell>
+                  <TableCell>Grace Period (min)</TableCell>
                   <TableCell>Assigned Employees</TableCell>
                   <TableCell>Actions</TableCell>
                 </TableRow>
@@ -227,6 +284,7 @@ export default function Shifts() {
                       <TableCell>{shift.name}</TableCell>
                       <TableCell>{shift.login_time}</TableCell>
                       <TableCell>{shift.logout_time}</TableCell>
+                      <TableCell>{shift.grace_period || 0}</TableCell>
                       <TableCell>
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                           {shiftEmployees.map(emp => (
@@ -246,10 +304,17 @@ export default function Shifts() {
                       <TableCell>
                         <IconButton
                           color="primary"
-                          onClick={() => setAssignDialog({ open: true, shiftId: shift.objectId })}
+                          onClick={() => handleEdit(shift)}
                           sx={{ mr: 1 }}
                         >
                           <EditIcon />
+                        </IconButton>
+                        <IconButton
+                          color="secondary"
+                          onClick={() => setAssignDialog({ open: true, shiftId: shift.objectId })}
+                          sx={{ mr: 1 }}
+                        >
+                          <GroupIcon />
                         </IconButton>
                         <IconButton
                           color="error"
@@ -325,6 +390,67 @@ export default function Shifts() {
             disabled={!selectedEmployee}
           >
             Assign
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={editDialog.open}
+        onClose={() => setEditDialog({ open: false, shift: null })}
+      >
+        <DialogTitle>Edit Shift</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2, minWidth: '400px' }}>
+            <TextField
+              label="Shift Name"
+              value={editedShift.name}
+              onChange={(e) => setEditedShift({ ...editedShift, name: e.target.value })}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Login Time"
+              type="time"
+              value={editedShift.login_time}
+              onChange={(e) => setEditedShift({ ...editedShift, login_time: e.target.value })}
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 300 }}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Logout Time"
+              type="time"
+              value={editedShift.logout_time}
+              onChange={(e) => setEditedShift({ ...editedShift, logout_time: e.target.value })}
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 300 }}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Grace Period (minutes)"
+              type="number"
+              value={editedShift.grace_period}
+              onChange={(e) => setEditedShift({ ...editedShift, grace_period: parseInt(e.target.value) || 0 })}
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ min: 0, max: 60, step: 5 }}
+              fullWidth
+              required
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditDialog({ open: false, shift: null })}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleUpdateShift} 
+            color="primary" 
+            variant="contained"
+            disabled={!editedShift.name || !editedShift.login_time || !editedShift.logout_time}
+          >
+            Save Changes
           </Button>
         </DialogActions>
       </Dialog>

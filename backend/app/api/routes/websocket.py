@@ -242,6 +242,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 position = data.get("position")
                 department = data.get("department")
                 status = data.get("status")
+                phone_number = data.get("phone_number")
+                email = data.get("email")
+                is_admin = data.get("is_admin")
 
                 if not all([employee_id, name, image_data]):
                     await websocket.send_json({
@@ -316,8 +319,10 @@ async def websocket_endpoint(websocket: WebSocket):
                             },
                             "position": position,
                             "department": department,
-                            "status": status
-                            
+                            "status": status,
+                            "phone_number": phone_number,
+                            "email": email,
+                            "is_admin": is_admin
                         })
                     
                     # new_employee = await asyncio.get_event_loop().run_in_executor(

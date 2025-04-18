@@ -34,6 +34,7 @@ app.include_router(office_timings.router, tags=["office-timings"])
 app.include_router(timezone.router, tags=["timezone"])
 app.include_router(websocket.router, tags=["websocket"])
 
+
 def initialize_back4app():
     """Initialize Back4App database with default data"""
     logger.info("Initializing Back4App database...")
@@ -46,17 +47,17 @@ def initialize_back4app():
             "embedding": "String",
             "department": "String",
             "position": "String",
-            "status": "String",  # active, inactive, on_leave
+            "status": "String",
             "shift": "Pointer<Shift>",
-            "created_at": "Date",
-            "updated_at": "Date"
+            "phone_number": "String",
+            "email": "String",
+            "is_admin": "Boolean",
         },
         "Shift": {
             "name": "String",
             "login_time": "String",
             "logout_time": "String",
-            "created_at": "Date",
-            "updated_at": "Date"
+            "grace_period": "Number",
         },
         "Attendance": {
             "employee_id": "String",
@@ -67,14 +68,11 @@ def initialize_back4app():
             "is_late": "Boolean",
             "is_early_exit": "Boolean",
             "early_exit_reason": "String",
-            "created_at": "Date",
-            "updated_at": "Date"
         },
         "TimezoneConfig": {
             "timezone_name": "String",
             "timezone_offset": "String",
-            "created_at": "Date",
-            "updated_at": "Date"
+
         },
         "EarlyExitReason": {
             "employee_id": "String",
@@ -82,8 +80,7 @@ def initialize_back4app():
             "attendance": "Pointer<Attendance>",
             "employee": "Pointer<Employee>",
             "reason": "String",
-            "created_at": "Date",
-            "updated_at": "Date"
+
         }
     }
 
@@ -111,17 +108,20 @@ def initialize_back4app():
             {
                 "name": "Morning Shift",
                 "login_time": "09:00",
-                "logout_time": "18:00"
+                "logout_time": "18:00",
+                "grace_period": 10
             },
             {
                 "name": "Evening Shift",
                 "login_time": "14:00",
-                "logout_time": "23:00"
+                "logout_time": "23:00",
+                "grace_period": 10
             },
             {
                 "name": "Night Shift",
                 "login_time": "22:00",
-                "logout_time": "07:00"
+                "logout_time": "07:00",
+                "grace_period": 10
             }
         ]
         for shift_data in default_shifts:
@@ -141,6 +141,7 @@ def initialize_back4app():
 
     logger.info("Database initialization completed!")
 
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application on startup"""
@@ -151,8 +152,9 @@ async def startup_event():
     asyncio.create_task(process_websocket_responses())
     logger.info("Application startup completed")
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources on shutdown"""
     process_pool.shutdown()
-    logger.info("Application shutdown completed") 
+    logger.info("Application shutdown completed")

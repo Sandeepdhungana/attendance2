@@ -21,6 +21,7 @@ class ShiftUpdate(BaseModel):
     name: str
     login_time: str
     logout_time: str
+    grace_period: int = 0
 
 class EmployeeUpdate(BaseModel):
     employee_id: str
@@ -208,6 +209,7 @@ def get_shifts():
         "name": shift["name"],
         "login_time": shift["login_time"],
         "logout_time": shift["logout_time"],
+        "grace_period": shift.get("grace_period", 0),
         "created_at": shift["createdAt"],
         "updated_at": shift["updatedAt"]
     } for shift in shifts]
@@ -220,7 +222,8 @@ def create_shift(shift_data: ShiftUpdate):
         result = shift.create({
             "name": shift_data.name,
             "login_time": shift_data.login_time,
-            "logout_time": shift_data.logout_time
+            "logout_time": shift_data.logout_time,
+            "grace_period": shift_data.grace_period
         })
         return {
             "message": "Shift created successfully",
@@ -239,7 +242,11 @@ def update_shift(shift_id: str, shift_data: ShiftUpdate):
             "name": shift_data.name,
             "login_time": shift_data.login_time,
             "logout_time": shift_data.logout_time,
-            "updated_at": get_local_time().isoformat()
+            "grace_period": shift_data.grace_period,
+            "updated_at": {
+                "__type": "Date",
+                "iso": get_local_time().isoformat()
+            }
         })
         return {
             "message": "Shift updated successfully",
@@ -311,6 +318,9 @@ async def register_employee(
     position: str = Form(...),
     status: str = Form("active"),
     shift_id: str = Form(...),
+    phone_number: str = Form(...),
+    email: str = Form(...),
+    is_admin: bool = Form(False),
     image: UploadFile = File(...)
 ):
     """Register a new employee with face recognition"""
@@ -361,7 +371,10 @@ async def register_employee(
                 "__type": "Pointer",
                 "className": "Shift",
                 "objectId": shift_id
-            }
+            },
+            "phone_number": phone_number,
+            "email": email,
+            "is_admin": is_admin
         })
 
         return {

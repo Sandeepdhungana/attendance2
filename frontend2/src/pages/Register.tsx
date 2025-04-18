@@ -34,6 +34,11 @@ const Register: React.FC = () => {
   const [position, setPosition] = useState('');
   const [status, setStatus] = useState('active');
   const [shift_id, setShiftId] = useState('');
+  const [phone, setPhone] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -67,6 +72,38 @@ const Register: React.FC = () => {
     }
   };
 
+  const validateEmail = (email: string) => {
+    const regex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    return regex.test(email);
+  };
+
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setEmail(value);
+    
+    if (value && !validateEmail(value)) {
+      setEmailError('Please enter a valid email address');
+    } else {
+      setEmailError('');
+    }
+  };
+
+  const validatePhone = (phone: string) => {
+    const regex = /^[0-9]{10,15}$/;
+    return regex.test(phone);
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setPhone(value);
+    
+    if (value && !validatePhone(value)) {
+      setPhoneError('Please enter a valid phone number (10-15 digits only)');
+    } else {
+      setPhoneError('');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -74,6 +111,16 @@ const Register: React.FC = () => {
 
     if (!employee_id || !name || !department || !position || !shift_id) {
       setError('Please fill in all fields');
+      return;
+    }
+
+    if (phone && !validatePhone(phone)) {
+      setError('Please enter a valid phone number');
+      return;
+    }
+
+    if (email && !validateEmail(email)) {
+      setError('Please enter a valid email address');
       return;
     }
 
@@ -117,6 +164,9 @@ const Register: React.FC = () => {
       formData.append('position', position);
       formData.append('status', status);
       formData.append('shift_id', shift_id);
+      formData.append('phone', phone);
+      formData.append('email', email);
+      formData.append('is_admin', isAdmin.toString());
       formData.append('image', imageFile);
 
       await api.post('/employees/register', formData, {
@@ -132,6 +182,9 @@ const Register: React.FC = () => {
       setPosition('');
       setStatus('active');
       setShiftId('');
+      setPhone('');
+      setEmail('');
+      setIsAdmin(false);
       setImage(null);
     } catch (err) {
       setError('Failed to register employee. Please try again.');
@@ -188,6 +241,31 @@ const Register: React.FC = () => {
               />
             </Grid>
 
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Phone Number"
+                value={phone}
+                onChange={handlePhoneChange}
+                error={!!phoneError}
+                helperText={phoneError}
+                required
+              />
+            </Grid>
+            
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Email"
+                type="email"
+                value={email}
+                onChange={handleEmailChange}
+                error={!!emailError}
+                helperText={emailError}
+                required
+              />
+            </Grid>
+
             <Grid item xs={12}>
               <FormControl fullWidth>
                 <InputLabel>Status</InputLabel>
@@ -198,6 +276,20 @@ const Register: React.FC = () => {
                 >
                   <MenuItem value="active">Active</MenuItem>
                   <MenuItem value="inactive">Inactive</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+
+            <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Admin Access</InputLabel>
+                <Select
+                  value={isAdmin.toString()}
+                  onChange={(e) => setIsAdmin(e.target.value === 'true')}
+                  label="Admin Access"
+                >
+                  <MenuItem value="false">No</MenuItem>
+                  <MenuItem value="true">Yes</MenuItem>
                 </Select>
               </FormControl>
             </Grid>
