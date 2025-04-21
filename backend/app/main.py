@@ -143,7 +143,7 @@ def initialize_back4app():
 async def startup_event():
     """Initialize the application on startup"""
     # this is always commented out
-    initialize_back4app()
+    # initialize_back4app()
     # Start the WebSocket response processing tasks
     asyncio.create_task(process_queue())
     asyncio.create_task(process_websocket_responses())
