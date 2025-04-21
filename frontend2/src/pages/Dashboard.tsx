@@ -48,6 +48,7 @@ export default function Dashboard() {
 
   const attendanceColumns: GridColDef[] = [
     { field: 'employee_id', headerName: 'Employee ID', width: 150 },
+    { field: 'name', headerName: 'Employee Name', width: 150 },
     { field: 'objectId', headerName: 'Object ID', width: 150 },
     { 
       field: 'entry_time', 

@@ -12,11 +12,13 @@ def get_attendance_records() -> List[Dict[str, Any]]:
     """Get all attendance records"""
     attendance_model = Attendance()
     attendances = attendance_model.query()
+
+    
     return [{
+        "name": db_query("Employee", where={"employee_id": att["employee_id"]}, limit=1)[0].get("name"),
         "objectId": att["objectId"],
         "id": att["employee_id"],  # Set id to employee_id for consistency with websocket
         "employee_id": att["employee_id"],
-        "name": att.get("employee", {}).get("name", "Unknown Employee"),
         "timestamp": att["timestamp"],
         "entry_time": att.get("timestamp", {}).get("iso") if isinstance(att.get("timestamp"), dict) else att.get("timestamp"),
         "exit_time": att.get("exit_time", {}).get("iso") if isinstance(att.get("exit_time"), dict) else att.get("exit_time"),
@@ -27,6 +29,11 @@ def get_attendance_records() -> List[Dict[str, Any]]:
         "created_at": att["createdAt"],
         "updated_at": att["updatedAt"]
     } for att in attendances]
+
+    results = []
+
+
+  
 
 def delete_attendance_record(attendance_id: str) -> Dict[str, str]:
     """Delete an attendance record"""
