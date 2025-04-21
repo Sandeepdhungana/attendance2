@@ -77,7 +77,7 @@ const Register: React.FC = () => {
 
   // Auto-clear messages after 10 seconds
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: ReturnType<typeof setTimeout>;
     if (error || success) {
       timer = setTimeout(() => {
         if (error) setError(null);
