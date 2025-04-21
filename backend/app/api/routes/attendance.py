@@ -96,7 +96,7 @@ def delete_attendance(attendance_id: str):
 @router.post("/attendance")
 async def mark_attendance(
     image: UploadFile = File(...),
-    entry_type: str = Form("entry")  # Default to entry if not specified
+    entry_type: str = Form("entry")  # Default is still entry, but we'll ignore this value
 ):
     """Mark attendance for an employee based on face recognition"""
     try:
@@ -127,7 +127,7 @@ async def mark_attendance(
                 detail="No matching employees found in the image"
             )
 
-        # Process each matched employee
+        # Process each matched employee - always use 'entry' type regardless of what was passed
         processed_employees = []
         attendance_updates = []
 
@@ -135,8 +135,8 @@ async def mark_attendance(
             employee = match['employee']
             similarity = match['similarity']
 
-            # Process attendance using shared function
-            result = process_attendance_for_employee(employee, similarity, entry_type)
+            # Always process as 'entry' - the backend will handle auto-exit internally
+            result = process_attendance_for_employee(employee, similarity, 'entry')
             
             if result["processed_employee"]:
                 processed_employees.append(result["processed_employee"])

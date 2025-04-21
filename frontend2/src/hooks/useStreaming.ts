@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { useWebSocket } from '../App';
 
-export const useStreaming = (entryType: 'entry' | 'exit') => {
+export const useStreaming = () => {
   const [isStreaming, setIsStreaming] = useState(false);
   const { sendMessage, isConnected } = useWebSocket();
   const streamIntervalRef = useRef<number | null>(null);
@@ -17,10 +17,10 @@ export const useStreaming = (entryType: 'entry' | 'exit') => {
         
         const imageSrc = getScreenshot();
         if (imageSrc) {
-          console.log('Sending streaming frame with entry type:', entryType);
+          console.log('Sending streaming frame');
           sendMessage({ 
             image: imageSrc,
-            entry_type: entryType,
+            entry_type: 'entry',
             streaming: true
           });
         }
@@ -29,7 +29,7 @@ export const useStreaming = (entryType: 'entry' | 'exit') => {
       sendFrame();
       streamIntervalRef.current = setInterval(sendFrame, 2500);
     }
-  }, [entryType, isConnected, sendMessage]);
+  }, [isConnected, sendMessage]);
 
   const stopStreaming = useCallback(() => {
     if (streamIntervalRef.current) {
@@ -64,7 +64,7 @@ export const useStreaming = (entryType: 'entry' | 'exit') => {
             const imageSrc = canvas.toDataURL('image/jpeg');
             sendMessage({ 
               image: imageSrc,
-              entry_type: entryType,
+              entry_type: 'entry',
               streaming: true
             });
           }
@@ -91,7 +91,7 @@ export const useStreaming = (entryType: 'entry' | 'exit') => {
         }
       };
     }
-  }, [entryType, isConnected, sendMessage, stopStreaming]);
+  }, [isConnected, sendMessage, stopStreaming]);
 
   return {
     isStreaming,

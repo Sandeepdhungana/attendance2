@@ -17,7 +17,6 @@ import api from '../api/config';
 export default function Attendance() {
   const theme = useTheme();
   const [isCapturing, setIsCapturing] = useState(false);
-  const [entryType, setEntryType] = useState<'entry' | 'exit'>('entry');
 
   const {
     isVideoMode,
@@ -49,21 +48,12 @@ export default function Attendance() {
     startStreaming,
     stopStreaming,
     startVideoStream,
-  } = useStreaming(entryType);
+  } = useStreaming();
 
   const {
     handleEarlyExitReason,
     handleEarlyExitDialogChange,
   } = useEarlyExit();
-
-  const handleEntryTypeChange = (
-    event: React.MouseEvent<HTMLElement>,
-    newEntryType: 'entry' | 'exit' | null,
-  ) => {
-    if (newEntryType !== null) {
-      setEntryType(newEntryType);
-    }
-  };
 
   const capture = useCallback(async () => {
     if (webcamRef.current) {
@@ -80,7 +70,7 @@ export default function Attendance() {
 
         const formData = new FormData();
         formData.append('image', blob, 'capture.jpg');
-        formData.append('entry_type', entryType);
+        formData.append('entry_type', 'entry');
 
         await api.post('/attendance', formData, {
           headers: {
@@ -93,7 +83,7 @@ export default function Attendance() {
         setIsCapturing(false);
       }
     }
-  }, [webcamRef, entryType]);
+  }, [webcamRef]);
 
   const handleStartStreaming = useCallback(() => {
     if (webcamRef.current) {
@@ -170,13 +160,11 @@ export default function Attendance() {
               borderTop: `1px solid ${alpha(theme.palette.divider, 0.7)}`
             }}>
               <Controls
-                entryType={entryType}
                 isVideoMode={isVideoMode}
                 isCapturing={isCapturing}
                 isStreaming={isStreaming}
                 webcamRef={webcamRef}
                 videoFile={videoFile}
-                handleEntryTypeChange={handleEntryTypeChange}
                 handleVideoChange={handleVideoChange}
                 capture={capture}
                 startStreaming={handleStartStreaming}

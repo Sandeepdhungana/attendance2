@@ -26,7 +26,7 @@ def get_local_time():
 class BaseModel:
     def __init__(self, class_name):
         self.class_name = class_name
-        self.base_url = f"{BACK4APP_SERVER_URL}/{class_name}"
+        self.base_url = f"{BACK4APP_SERVER_URL}/classes/{class_name}"
 
     def create(self, data):
         response = requests.post(self.base_url, headers=HEADERS, json=data)

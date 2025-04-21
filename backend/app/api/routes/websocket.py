@@ -28,7 +28,7 @@ from app.utils.websocket import (
     broadcast_attendance_update,
     handle_future_completion
 )
-from app.utils.processing import process_image_in_process
+from app.utils.processing import process_image_in_process, process_attendance_for_employee
 from app.utils.time_utils import get_local_time
 from app.config import IMAGES_DIR, MAX_CONCURRENT_TASKS_PER_CLIENT
 
@@ -421,7 +421,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         future = process_pool.submit(
                             process_image_in_process,
                             img,
-                            entry_type,
+                            'entry',  # Always use 'entry' regardless of what client sends
                             client_id
                         )
                         
@@ -448,7 +448,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     future = process_pool.submit(
                                         process_image_in_process,
                                         img,
-                                        entry_type,
+                                        'entry',  # Always use 'entry' regardless of what client sends
                                         client_id
                                     )
                                     
@@ -586,16 +586,23 @@ async def websocket_endpoint(websocket: WebSocket):
                                 employee = match['employee']
                                 similarity = match['similarity']
                                 
-                                # Format for streaming
-                                similarity_percent = round(similarity * 100, 1)
-                                processed_employees.append({
-                                    "name": employee.get("name"),
-                                    "employee_id": employee.get("employee_id"),
-                                    "similarity_percent": similarity_percent,
-                                    "confidence_str": f"{similarity_percent}%",
-                                    "detection_time": get_local_time().isoformat(),
-                                    "is_streaming": True
-                                })
+                                # Process attendance with auto-exit detection
+                                try:
+                                    result = process_attendance_for_employee(employee, similarity, 'entry')
+                                    if result["processed_employee"]:
+                                        processed_employees.append(result["processed_employee"])
+                                except Exception as e:
+                                    logger.error(f"Error processing attendance: {str(e)}")
+                                    # Fallback to simple format for streaming
+                                    similarity_percent = round(similarity * 100, 1)
+                                    processed_employees.append({
+                                        "name": employee.get("name"),
+                                        "employee_id": employee.get("employee_id"),
+                                        "similarity_percent": similarity_percent,
+                                        "confidence_str": f"{similarity_percent}%",
+                                        "detection_time": get_local_time().isoformat(),
+                                        "is_streaming": True
+                                    })
                             
                             await websocket.send_json({
                                 "multiple_users": True,
@@ -614,7 +621,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         future = process_pool.submit(
                             process_image_in_process,
                             img,  # Pass numpy array directly
-                            entry_type,
+                            'entry',  # Always use 'entry' regardless of what client sends
                             client_id
                         )
                         
@@ -641,7 +648,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     future = process_pool.submit(
                                         process_image_in_process,
                                         img,
-                                        entry_type,
+                                        'entry',  # Always use 'entry' regardless of what client sends
                                         client_id
                                     )
                                     

@@ -237,7 +237,7 @@ def get_early_exit_reasons():
                 "user_name": employee_name,
                 "attendance_id": attendance_id,
                 "reason": reason.get("reason"),
-                "timestamp": reason.get("created_at"),
+                "timestamp": reason.get("createdAt"),
                 "is_early_exit": is_early_exit,
                 "exit_time": exit_time
             })

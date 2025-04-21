@@ -2,32 +2,26 @@ import React from 'react';
 import {
   Box,
   Button,
-  ToggleButton,
-  ToggleButtonGroup,
   Alert,
   useTheme,
   alpha,
   Paper,
-  Divider,
   Typography,
 } from '@mui/material';
 import { 
-  Login as LoginIcon, 
-  Logout as LogoutIcon, 
   CloudUpload as CloudUploadIcon,
   Videocam as VideocamIcon,
   PlayArrow as PlayArrowIcon,
   Stop as StopIcon,
+  PersonAdd as PersonAddIcon
 } from '@mui/icons-material';
 
 interface ControlsProps {
-  entryType: 'entry' | 'exit';
   isVideoMode: boolean;
   isCapturing: boolean;
   isStreaming: boolean;
   webcamRef: React.RefObject<any | null>;
   videoFile: File | null;
-  handleEntryTypeChange: (event: React.MouseEvent<HTMLElement>, newEntryType: 'entry' | 'exit' | null) => void;
   handleVideoChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   capture: () => void;
   startStreaming: () => void;
@@ -37,13 +31,11 @@ interface ControlsProps {
 }
 
 export const Controls: React.FC<ControlsProps> = ({
-  entryType,
   isVideoMode,
   isCapturing,
   isStreaming,
   webcamRef,
   videoFile,
-  handleEntryTypeChange,
   handleVideoChange,
   capture,
   startStreaming,
@@ -55,69 +47,13 @@ export const Controls: React.FC<ControlsProps> = ({
   
   return (
     <>
-      <Box sx={{ mb: 3 }}>
-        <Paper
-          elevation={0}
-          sx={{ 
-            p: 0.5, 
-            backgroundColor: alpha(theme.palette.background.default, 0.8),
-            borderRadius: 3,
-            border: `1px solid ${alpha(theme.palette.divider, 0.7)}`,
-            display: 'inline-block',
-          }}
-        >
-          <ToggleButtonGroup
-            value={entryType}
-            exclusive
-            onChange={handleEntryTypeChange}
-            aria-label="entry type"
-            sx={{
-              '& .MuiToggleButtonGroup-grouped': {
-                border: 'none',
-                borderRadius: 2,
-                px: 3,
-                py: 1,
-                fontWeight: 600,
-                mx: 0.5,
-                textTransform: 'none',
-                '&.Mui-selected': {
-                  backgroundColor: entryType === 'entry' 
-                    ? alpha(theme.palette.primary.main, 0.8)
-                    : alpha(theme.palette.secondary.main, 0.8),
-                  color: '#fff',
-                  '&:hover': {
-                    backgroundColor: entryType === 'entry' 
-                      ? alpha(theme.palette.primary.main, 1)
-                      : alpha(theme.palette.secondary.main, 1),
-                  }
-                },
-                '&:not(.Mui-selected)': {
-                  backgroundColor: alpha(theme.palette.action.selected, 0.08),
-                  '&:hover': {
-                    backgroundColor: alpha(theme.palette.action.selected, 0.15),
-                  }
-                }
-              }
-            }}
-          >
-            <ToggleButton value="entry" aria-label="entry">
-              <LoginIcon sx={{ mr: 1 }} />
-              Entry
-            </ToggleButton>
-            <ToggleButton value="exit" aria-label="exit">
-              <LogoutIcon sx={{ mr: 1 }} />
-              Exit
-            </ToggleButton>
-          </ToggleButtonGroup>
-        </Paper>
-      </Box>
-
       <Box sx={{ 
         display: 'flex', 
         flexWrap: 'wrap',
         gap: 2, 
         mb: 3,
-        alignItems: 'center'
+        alignItems: 'center',
+        justifyContent: 'center'
       }}>
         <input
           type="file"
@@ -150,23 +86,20 @@ export const Controls: React.FC<ControlsProps> = ({
         
         <Button
           variant="contained"
-          color={entryType === 'entry' ? 'primary' : 'secondary'}
+          color="primary"
           onClick={isVideoMode ? startVideoStream : capture}
           disabled={isCapturing || isStreaming || (!isVideoMode && !webcamRef.current) || (isVideoMode && !videoFile)}
-          startIcon={entryType === 'entry' ? <LoginIcon /> : <LogoutIcon />}
+          startIcon={<PersonAddIcon />}
           sx={{ 
             borderRadius: 2,
             py: 1.2,
             px: 3,
             textTransform: 'none',
             fontWeight: 600,
-            boxShadow: `0 4px 12px ${alpha(
-              entryType === 'entry' ? theme.palette.primary.main : theme.palette.secondary.main, 
-              0.2
-            )}`,
+            boxShadow: `0 4px 12px ${alpha(theme.palette.primary.main, 0.2)}`,
           }}
         >
-          {isCapturing ? 'Processing...' : `Capture ${entryType === 'entry' ? 'Entry' : 'Exit'}`}
+          {isCapturing ? 'Processing...' : 'Mark Attendance'}
         </Button>
         
         {!isVideoMode && (
