@@ -5,6 +5,12 @@ import logging
 from datetime import datetime, timedelta
 from app.database import query as db_query, create, update
 from app.dependencies import get_queues
+from app.services.send_email import (
+    send_entry_notification,
+    send_exit_notification,
+    send_late_entry_notification,
+    send_early_exit_notification
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +69,15 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     )
     
     existing_attendance = existing_attendance[0] if existing_attendance else None
+
+    # Ensure we have complete employee data including email
+    employee_id = employee.get("employee_id")
+    employee_data = db_query("Employee", where={"employee_id": employee_id}, limit=1)
+    if employee_data and len(employee_data) > 0:
+        employee_data = employee_data[0]
+        employee_email = employee_data.get("email")
+    else:
+        employee_email = None
 
     result = {
         "processed_employee": None,
@@ -184,6 +199,8 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         attendance_data = {
             "action": "entry",
             "employee_id": employee.get("employee_id"),
+            "email": employee_email,
+            "employee_name": employee.get("name"),
             "timestamp": current_time.isoformat(),
             "similarity": similarity,
             "is_late": is_late,
@@ -203,6 +220,14 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
             "type": "attendance_update",
             "data": [attendance_data]
         })
+        
+        # Send appropriate attendance email notification
+        if is_late:
+            # Send late entry notification
+            send_late_entry_notification(attendance_data, employee_email)
+        else:
+            # Send regular entry notification
+            send_entry_notification(attendance_data, employee_email)
 
     else:  # exit
         if not existing_attendance:
@@ -291,6 +316,7 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         attendance_data = {
             "action": "exit",
             "employee_id": employee.get("employee_id"),
+            "employee_name": employee.get("name"),
             "timestamp": current_time.isoformat(),
             "similarity": similarity,
             "is_early_exit": is_early_exit,
@@ -309,6 +335,14 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
             "type": "attendance_update",
             "data": [attendance_data]
         })
+        
+        # Send appropriate exit email notification
+        if is_early_exit:
+            # Send early exit notification
+            send_early_exit_notification(attendance_data, employee_email)
+        else:
+            # Send regular exit notification
+            send_exit_notification(attendance_data, employee_email)
 
     return result
 

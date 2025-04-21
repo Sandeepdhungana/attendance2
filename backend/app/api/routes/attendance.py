@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.database import query, create, delete
 from app.services.attendance import get_attendance_records, delete_attendance_record, get_employee_shift_info
 from app.utils.processing import process_image_in_process,process_attendance_for_employee
 from app.dependencies import get_process_pool, get_pending_futures, get_client_tasks, get_queues, get_face_recognition
 from app.utils.websocket import broadcast_attendance_update
 from app.utils.time_utils import get_local_time
+from app.services.send_email import send_welcome_email
 import asyncio
 import logging
 import numpy as np
@@ -312,56 +313,46 @@ def delete_shift(shift_id: str):
 
 @router.post("/register")
 async def register_employee(
-    name: str = Form(...),
     employee_id: str = Form(...),
+    name: str = Form(...),
     department: str = Form(...),
     position: str = Form(...),
     status: str = Form("active"),
     shift_id: str = Form(...),
-    phone_number: str = Form(...),
-    email: str = Form(...),
-    is_admin: bool = Form(False),
+    email: Optional[str] = Form(None),
     image: UploadFile = File(...)
 ):
-    """Register a new employee with face recognition"""
+    """Register a new employee"""
     try:
-        # Check if employee ID already exists
-        existing_employee = query("Employee", where={"employee_id": employee_id}, limit=1)
-        if existing_employee:
-            raise HTTPException(
-                status_code=400,
-                detail="Employee ID already exists"
-            )
-
-        # Check if shift exists
-        shift = query("Shift", where={"objectId": shift_id}, limit=1)
-        if not shift:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid shift ID"
-            )
-
         # Read and decode image
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # Get face recognition instance
-        face_recognition = get_face_recognition()
-
         # Get face embedding
-        face_embeddings = face_recognition.get_embeddings(img)
-        if not face_embeddings:
+        face_recognition = get_face_recognition()
+        embedding = face_recognition.get_embedding(img)
+        logger.info(f"Embedding: {embedding}")
+        if embedding is None:
             raise HTTPException(
                 status_code=400, detail="No face detected in image")
 
+        # Check if employee already exists
+        employee_model = Employee()
+        existing_employee = employee_model.query(where={"employee_id": employee_id})
+        if existing_employee:
+            raise HTTPException(
+                status_code=400,
+                detail="Employee ID already registered"
+            )
+            
         # Check if this face is already registered by comparing with existing employees
-        all_employees = query("Employee")
+        all_employees = employee_model.query()
         
         # Find matches with similarity > 0.6
         face_similarity_threshold = 0.6
         matches = face_recognition.find_matches_for_embeddings(
-            face_embeddings, all_employees, threshold=face_similarity_threshold
+            [embedding], all_employees, threshold=face_similarity_threshold
         )
         
         if matches:
@@ -382,40 +373,65 @@ async def register_employee(
                 # Re-raise HTTPExceptions to preserve status code and details
                 raise
 
-        # Convert embedding to string for storage
-        embedding_str = ",".join(map(str, face_embeddings[0]))
-
-        # Create employee record
-        employee = Employee()
-        result = employee.create({
-            "name": name,
+        # Create new employee
+        employee_data = {
             "employee_id": employee_id,
+            "name": name,
             "department": department,
             "position": position,
             "status": status,
-            "embedding": embedding_str,
+            "embedding": face_recognition.embedding_to_str(embedding),
             "shift": {
                 "__type": "Pointer",
                 "className": "Shift",
                 "objectId": shift_id
-            },
-            "phone_number": phone_number,
-            "email": email,
-            "is_admin": is_admin
-        })
-
-        return {
-            "message": "Employee registered successfully",
-            "employee": result
+            }
         }
+        
+        # Add email if provided
+        if email:
+            employee_data["email"] = email
+            
+        new_employee = employee_model.create(employee_data)
+
+        # Broadcast user registration
+        attendance_update = {
+            "action": "register_user",
+            "user_id": employee_id,
+            "name": name,
+            "timestamp": get_local_time().isoformat()
+        }
+        processing_results_queue, _ = get_queues()
+        processing_results_queue.put({
+            "type": "attendance_update",
+            "data": [attendance_update]
+        })
+        
+        # Send welcome email to the new employee if email is provided
+        if email:
+            send_welcome_email(
+                employee_data={
+                    "employee_id": employee_id,
+                    "name": name,
+                    "department": department,
+                    "position": position
+                },
+                employee_email=email
+            )
+
+        logger.info(f"Employee registered successfully: {employee_id} ({name})")
+        return {"message": "Employee registered successfully"}
+
     except HTTPException as he:
-        # Re-raise HTTP exceptions with appropriate status code
+        # Re-raise HTTP exceptions to preserve status code and details
         logger.error(f"HTTP error during employee registration: {str(he)}")
         raise
     except Exception as e:
-        # Log and convert other exceptions to 500
         logger.error(f"Error registering employee: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        ) 
 
 @router.get("/employees/{employee_id}/shift")
 def get_employee_shift(employee_id: str):

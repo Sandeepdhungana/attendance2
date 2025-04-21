@@ -6,6 +6,7 @@ from app.utils.websocket import broadcast_attendance_update
 from app.utils.time_utils import get_local_time
 from app.dependencies import get_queues
 from app.models import Employee
+from app.services.send_email import send_welcome_email
 from pydantic import BaseModel
 import cv2
 import numpy as np
@@ -143,6 +144,7 @@ async def register_employee(
     position: str = Form(...),
     status: str = Form("active"),
     shift_id: str = Form(...),
+    email: Optional[str] = Form(None),
     image: UploadFile = File(...)
 ):
     """Register a new employee"""
@@ -155,6 +157,7 @@ async def register_employee(
         # Get face embedding
         face_recognition = get_face_recognition()
         embedding = face_recognition.get_embedding(img)
+        logger.info(f"Embedding: {embedding}")
         if embedding is None:
             raise HTTPException(
                 status_code=400, detail="No face detected in image")
@@ -171,13 +174,10 @@ async def register_employee(
         # Check if this face is already registered by comparing with existing employees
         all_employees = employee_model.query()
         
-        # Convert single embedding to list for find_matches_for_embeddings
-        face_embeddings = [embedding]
-        
         # Find matches with similarity > 0.6
         face_similarity_threshold = 0.6
         matches = face_recognition.find_matches_for_embeddings(
-            face_embeddings, all_employees, threshold=face_similarity_threshold
+            [embedding], all_employees, threshold=face_similarity_threshold
         )
         
         if matches:
@@ -199,7 +199,7 @@ async def register_employee(
                 raise
 
         # Create new employee
-        new_employee = employee_model.create({
+        employee_data = {
             "employee_id": employee_id,
             "name": name,
             "department": department,
@@ -211,7 +211,13 @@ async def register_employee(
                 "className": "Shift",
                 "objectId": shift_id
             }
-        })
+        }
+        
+        # Add email if provided
+        if email:
+            employee_data["email"] = email
+            
+        new_employee = employee_model.create(employee_data)
 
         # Broadcast user registration
         attendance_update = {
@@ -225,6 +231,18 @@ async def register_employee(
             "type": "attendance_update",
             "data": [attendance_update]
         })
+        
+        # Send welcome email to the new employee if email is provided
+        if email:
+            send_welcome_email(
+                employee_data={
+                    "employee_id": employee_id,
+                    "name": name,
+                    "department": department,
+                    "position": position
+                },
+                employee_email=email
+            )
 
         logger.info(f"Employee registered successfully: {employee_id} ({name})")
         return {"message": "Employee registered successfully"}

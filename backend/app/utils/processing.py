@@ -9,7 +9,7 @@ from ..utils.time_utils import get_local_date, get_local_time, convert_to_local_
 from datetime import datetime, timedelta
 from ..database import query as db_query
 from ..database import create, update
-from ..services.sendpulse_service import send_message_by_phone
+from ..services.send_email import send_entry_notification, send_exit_notification,send_late_entry_notification, send_early_exit_notification
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                             if current_time < logout_time:
                                 is_early_exit = True
                                 early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Shift end time: {logout_time.strftime('%H:%M')})"
-
+                                
                     # Update the existing attendance record with exit time
                     update("Attendance", existing_attendance.get("objectId"), {
                         "exit_time": {
@@ -109,6 +109,27 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                             "iso": current_time.isoformat()
                         }
                     })
+                    
+                    # Prepare data for email notification
+                    notification_data = {
+                        "name": employee.get("name"),
+                        "employee_id": employee.get("employee_id"),
+                        "employee_name": employee.get("name"),
+                        "timestamp": current_time.isoformat(),
+                        "similarity": rounded_similarity,
+                        "is_early_exit": is_early_exit,
+                        "early_exit_message": early_exit_message,
+                        "entry_time": entry_time_str,
+                        "exit_time": current_time.isoformat(),
+                        "objectId": existing_attendance.get("objectId")
+                    }
+                    
+                    # Send exit notification with complete data
+                    send_exit_notification(notification_data, employee.get("email"))
+                    
+                    # If early exit, also send early exit notification
+                    if is_early_exit:
+                        send_early_exit_notification(notification_data, employee.get("email"))
 
                     attendance_data = {
                         "action": "exit",
@@ -245,18 +266,31 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     
     new_attendance = create("Attendance", new_attendance_data)
     
-    # Only send message to employee on first entry
-    try:
-        send_message_by_phone(bot_id="67ff97f2dccc60523807cffd", phone=971524472456, message_text="Welcome to Zainlee, Your attendance has been marked")
-    except Exception as e:
-        logger.error(f"Error sending message: {str(e)}")
-
     # Create message for on-time arrival
     message = "Entry marked successfully"
+    
+    # Prepare data for email notification
+    notification_data = {
+        "name": employee.get("name"),
+        "employee_id": employee.get("employee_id"),
+        "employee_name": employee.get("name"),
+        "timestamp": current_time.isoformat(),
+        "similarity": rounded_similarity,
+        "is_late": is_late,
+        "late_message": late_message,
+        "entry_time": current_time.isoformat(),
+        "exit_time": None,
+        "minutes_late": late_minutes if is_late else None,
+        "time_components": time_components if is_late else None,
+        "objectId": new_attendance.get("objectId")
+    }
+    
     if is_late:
         message += f" - {late_message}"
+        send_late_entry_notification(notification_data, employee.get("email"))
     elif login_time:
         message += f" - On time (Shift start time: {login_time.strftime('%H:%M')})"
+        send_entry_notification(notification_data, employee.get("email"))
     
     attendance_data = {
         "action": "entry",

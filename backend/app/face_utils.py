@@ -71,6 +71,7 @@ class FaceRecognition:
 
     def embedding_to_str(self, embedding):
         """Convert numpy array to string for storage"""
+        logger.info(f"Embedding: {embedding}")
         try:
             return json.dumps(embedding.tolist())
         except Exception as e:
