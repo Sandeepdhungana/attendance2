@@ -19,19 +19,7 @@ export const useOfficeTimings = () => {
     optimisticUpdate
   } = useOptimisticState<OfficeTiming[]>([]);
 
-  const fetchTimings = async () => {
-    try {
-      setLoading(true);
-      const response = await api.get('/office-timings');
-      const timingsData = Array.isArray(response.data) ? response.data : [response.data];
-      setTimings(timingsData);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch office timings');
-    } finally {
-      setLoading(false);
-    }
-  };
+  
 
   const fetchCurrentTimezone = async () => {
     try {
@@ -113,12 +101,11 @@ export const useOfficeTimings = () => {
   };
 
   const handleTimezoneChange = (timezone: string) => {
-    setCurrentTimezone(timezone);
-    fetchTimings(); // Refresh timings after timezone change
+    setCurrentTimezone(timezone)
   };
 
   useEffect(() => {
-    fetchTimings();
+
     fetchCurrentTimezone();
   }, []);
 

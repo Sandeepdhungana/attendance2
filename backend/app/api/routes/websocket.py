@@ -1,7 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Dict, Any
 import uuid
-import asyncio
 import logging
 import base64
 import numpy as np
@@ -9,29 +7,24 @@ import cv2
 import os
 from datetime import datetime
 import concurrent.futures
-from app.database import query, create, delete, update
+from app.database import query, create, delete
 from app.dependencies import (
     get_process_pool,
     get_thread_pool,
     get_pending_futures,
     get_client_tasks,
-    get_queues,
     get_active_connections,
     get_face_recognition,
-    get_employee_cache,
     get_cached_employees
 )
 from app.utils.websocket import (
-    ping_client,
-    process_queue,
-    process_websocket_responses,
     broadcast_attendance_update,
     handle_future_completion
 )
 from app.utils.processing import process_image_in_process, process_attendance_for_employee
 from app.utils.time_utils import get_local_time
 from app.config import IMAGES_DIR, MAX_CONCURRENT_TASKS_PER_CLIENT
-from app.database import db_query
+
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +71,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 def fetch_attendance():
                     attendance_records = query("Attendance")
                     return [{
-                        "name": db_query("Employee", where={"employee_id": att["employee_id"]}, limit=1)[0].get("name"),
+                        "name": query("Employee", where={"employee_id": att["employee_id"]}, limit=1)[0].get("name"),
                         "objectId": att["objectId"],
                         # Set id to employee_id for consistency with websocket
                         "id": att["employee_id"],

@@ -42,6 +42,7 @@ export interface AttendanceUpdate {
   similarity?: number;
   entry_time?: string;
   exit_time?: string;
+  objectId: string | null;
 }
 
 export interface EarlyExitReason {

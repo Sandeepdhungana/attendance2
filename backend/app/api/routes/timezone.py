@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, Form
-from typing import Dict, Any
 from app.models import TimezoneConfig
 from app.database import query
 import pytz

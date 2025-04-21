@@ -11,7 +11,8 @@ export const useEarlyExit = () => {
     reason: null,
   });
   
-  const [attendanceId, setAttendanceId] = useState<number | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [attendanceId, setAttendanceId] = useState<string | null>(null);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
   const [reasonText, setReasonText] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -24,15 +25,34 @@ export const useEarlyExit = () => {
     if (error) clearError();
   };
 
-  const handleEarlyExitReason = async (textOverride?: string, empIdOverride?: string) => {
-    console.log("handleEarlyExitReason called with:", { textOverride, empIdOverride });
+  /**
+   * Handle submission of early exit reason
+   * @param textOverride Optional override for the reason text
+   * @param attendanceIdOverride Optional override for attendance ID (objectId)
+   * @param empIdOverride Optional override for employee ID
+   */
+  const handleEarlyExitReason = async (
+    textOverride?: string, 
+    attendanceIdOverride?: string,
+    empIdOverride?: string
+  ) => {
+    console.log("handleEarlyExitReason called with:", { 
+      textOverride, 
+      attendanceIdOverride,
+      empIdOverride 
+    });
     
     // If external parameters are provided, use them
     // Otherwise fall back to the internal state
     const reasonToUse = textOverride || reasonText;
     const employeeIdToUse = empIdOverride || employeeId;
+    const attendanceIdToUse = attendanceIdOverride || attendanceId;
     
-    console.log("Values to be used:", { reasonToUse, employeeIdToUse, attendanceId });
+    console.log("Values to be used:", { 
+      reasonToUse, 
+      employeeIdToUse, 
+      attendanceIdToUse 
+    });
     
     if (!reasonToUse || reasonToUse.trim() === '') {
       console.error("Missing required data for early exit reason submission");
@@ -45,14 +65,21 @@ export const useEarlyExit = () => {
 
     try {
       // Option 1: If we have an attendance ID, use it directly
-      if (attendanceId && attendanceId > 0) {
+      if (attendanceIdToUse) {
+        // Validate the attendance ID
+        if (typeof attendanceIdToUse !== 'string' || attendanceIdToUse.trim() === '') {
+          console.error("Invalid attendance ID format:", attendanceIdToUse);
+          setError("Invalid attendance ID. Please try again or contact support.");
+          return false;
+        }
+
         // Create data object with proper typing
         const data: {
-          attendance_id: number;
+          attendance_id: string;  // This is an objectId string
           reason: string;
           employee_id?: string;
         } = {
-          attendance_id: attendanceId,
+          attendance_id: attendanceIdToUse,
           reason: reasonToUse
         };
 
@@ -63,15 +90,21 @@ export const useEarlyExit = () => {
 
         console.log("Submitting early exit reason with attendance_id:", data);
         
-        const response = await api.post('/early-exit-reason', data);
-        console.log("Early exit reason submission response:", response);
-        
-        setEarlyExitDialog({
-          open: false,
-          reason: null,
-        });
-        
-        return true;
+        try {
+          console.log(`Making API POST request to /early-exit-reason with attendance_id: "${data.attendance_id}"`);
+          const response = await api.post('/early-exit-reason', data);
+          console.log("Early exit reason submission response:", response);
+          
+          setEarlyExitDialog({
+            open: false,
+            reason: null,
+          });
+          
+          return true;
+        } catch (apiError) {
+          console.error('Early exit reason API error:', apiError);
+          throw apiError; // Rethrow to be caught by outer catch block
+        }
       }
       
       // Option 2: If we don't have an attendance ID but have an employee ID
@@ -86,6 +119,7 @@ export const useEarlyExit = () => {
         console.log("Submitting to employee-early-exit endpoint:", employeeData);
         
         try {
+          console.log(`Making API POST request to /employee-early-exit with employee_id: "${employeeData.employee_id}"`);
           const response = await api.post('/employee-early-exit', employeeData);
           console.log("Employee early exit response:", response);
           

@@ -2,7 +2,6 @@ from app.database import get_db
 from app.face_utils import FaceRecognition
 from multiprocessing import Manager, cpu_count
 import concurrent.futures
-import multiprocessing
 import time
 import logging
 from app.models import Employee

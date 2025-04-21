@@ -16,14 +16,14 @@ interface EarlyExitDialogProps {
   open: boolean;
   onClose: () => void;
   reason: EarlyExitReason | null;
+  onSubmit: (reasonText: string, attendanceId: string) => Promise<boolean>;
 }
 
-export const EarlyExitDialog: React.FC<EarlyExitDialogProps> = ({ open, onClose, reason }) => {
+export const EarlyExitDialog: React.FC<EarlyExitDialogProps> = ({ open, onClose, reason, onSubmit }) => {
   const { 
     reasonText, 
     isSubmitting, 
     handleReasonTextChange, 
-    handleEarlyExitReason, 
     error, 
     setReasonText, 
     clearError,
@@ -32,9 +32,9 @@ export const EarlyExitDialog: React.FC<EarlyExitDialogProps> = ({ open, onClose,
   } = useEarlyExit();
   
   const [localEmployeeId, setLocalEmployeeId] = useState<string | null>(null);
-  const [localAttendanceId, setLocalAttendanceId] = useState<number | null>(null);
+  const [localAttendanceId, setLocalAttendanceId] = useState<string | null>(null);
 
-  // Set employee ID when reason changes
+  // Set employee ID and attendance ID when reason changes
   useEffect(() => {
     if (reason) {
       console.log('Dialog received reason object:', reason);
@@ -55,6 +55,8 @@ export const EarlyExitDialog: React.FC<EarlyExitDialogProps> = ({ open, onClose,
         console.log('Setting local attendance ID in dialog:', reason.attendance_id);
         setLocalAttendanceId(reason.attendance_id);
         setAttendanceId(reason.attendance_id); // Also set in the hook
+      } else {
+        console.error('No attendance ID found in reason object:', reason);
       }
     }
   }, [reason, setEmployeeId, setAttendanceId]);
@@ -68,21 +70,22 @@ export const EarlyExitDialog: React.FC<EarlyExitDialogProps> = ({ open, onClose,
   }, [open, setReasonText, clearError]);
 
   const handleSubmit = async () => {
-    // Use local state for employee ID to ensure it's available
+    // Use local state to ensure we have all required data
     console.log('Submitting early exit reason with:', {
       employeeId: localEmployeeId,
       attendanceId: localAttendanceId,
       reasonText, 
     });
     
-    // Validation to ensure we have an employee ID
-    if (!localEmployeeId) {
-      console.error('No employee ID provided for early exit reason');
+    // Validation to ensure we have the attendance ID
+    if (!localAttendanceId) {
+      console.error('No attendance ID provided for early exit reason');
       return;
     }
     
-    // Pass the employee ID directly
-    const success = await handleEarlyExitReason(reasonText, localEmployeeId);
+    // Pass the attendance ID and reason to the parent component's onSubmit handler
+    console.log(`Calling onSubmit with reason: "${reasonText}" and attendanceId: "${localAttendanceId}"`);
+    const success = await onSubmit(reasonText, localAttendanceId);
     if (success) {
       onClose();
     }

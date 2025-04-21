@@ -1,4 +1,4 @@
-from app.models import Employee, Shift
+from app.models import Employee
 from typing import List, Dict, Any
 from app.database import query
 

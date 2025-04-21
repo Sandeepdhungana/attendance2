@@ -4,12 +4,12 @@ import base64
 import logging
 from typing import List, Dict, Any
 from ..dependencies import get_face_recognition
-from ..models import Employee, Attendance, Shift
 from ..utils.time_utils import get_local_date, get_local_time, convert_to_local_time
 from datetime import datetime, timedelta
 from ..database import query as db_query
 from ..database import create, update
 from ..services.send_email import send_entry_notification, send_exit_notification,send_late_entry_notification, send_early_exit_notification
+from ..models import Attendance
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +42,20 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     
     # Format similarity to 2 decimal places
     rounded_similarity = round(similarity, 2)
+    
+    # Create Attendance model instance for using its methods
+    attendance_model = Attendance()
 
     result = {
         "processed_employee": None,
         "attendance_update": None
     }
+    
+    # Ensure we have employee_name for consistent output
+    employee_name = employee.get("name", "Unknown")
+    # Log a warning if name is missing
+    if employee_name == "Unknown" and employee.get("employee_id"):
+        logger.warning(f"Employee with ID {employee.get('employee_id')} has no name.")
 
     # We only process as "entry" type now since frontend always sends entry
     # But we'll handle auto-exit detection internally
@@ -61,41 +70,14 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                 
                 # If more than AUTO_EXIT_THRESHOLD seconds have passed, mark as exit
                 if time_diff.total_seconds() > AUTO_EXIT_THRESHOLD:
-                    logger.info(f"Auto-exit triggered for {employee.get('name')} (ID: {employee.get('employee_id')}) after {time_diff.total_seconds()} seconds")
+                    logger.info(f"Auto-exit triggered for {employee_name} (ID: {employee.get('employee_id')}) after {time_diff.total_seconds()} seconds")
                     
-                    # Process exit logic
-                    is_early_exit = False
-                    early_exit_message = None
+                    # Process exit logic using the new Attendance model method
+                    is_early_exit, early_exit_message = attendance_model.check_early_exit(
+                        employee.get("employee_id"), 
+                        exit_time=current_time
+                    )
                     
-                    # Get employee shift information for early exit check
-                    logout_time = None
-                    shift_id = employee.get("shift")
-                    
-                    if shift_id and isinstance(shift_id, dict) and shift_id.get("objectId"):
-                        # Get shift details using the pointer
-                        shift = db_query("Shift", 
-                            where={"objectId": shift_id.get("objectId")},
-                            limit=1
-                        )
-                        shift = shift[0] if shift else None
-                        
-                        if shift and shift.get("logout_time"):
-                            # Parse logout_time from string
-                            logout_time_str = shift.get("logout_time")
-                            logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
-                            
-                            # Convert logout_time to timezone-aware datetime for today
-                            logout_time = datetime.combine(today, 
-                                                        datetime.min.time().replace(hour=logout_time_hours, 
-                                                                                    minute=logout_time_minutes))
-                            logout_time = convert_to_local_time(logout_time)
-                            logger.info(f"Logout time: {logout_time}")
-                            logger.info(f"Current time: {current_time}")
-                            
-                            if current_time < logout_time:
-                                is_early_exit = True
-                                early_exit_message = f"Early exit: {current_time.strftime('%H:%M')} (Shift end time: {logout_time.strftime('%H:%M')})"
-                                
                     # Update the existing attendance record with exit time
                     update("Attendance", existing_attendance.get("objectId"), {
                         "exit_time": {
@@ -103,6 +85,8 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                             "iso": current_time.isoformat()
                         },
                         "is_early_exit": is_early_exit,
+                        "early_exit_reason": early_exit_message if is_early_exit else None,
+                        "early_exit_message": early_exit_message if is_early_exit else None,
                         "confidence": max(existing_attendance.get("confidence", 0), rounded_similarity),
                         "updated_at": {
                             "__type": "Date",
@@ -112,13 +96,14 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                     
                     # Prepare data for email notification
                     notification_data = {
-                        "name": employee.get("name"),
+                        "name": employee_name,
                         "employee_id": employee.get("employee_id"),
-                        "employee_name": employee.get("name"),
+                        "employee_name": employee_name,
                         "timestamp": current_time.isoformat(),
                         "similarity": rounded_similarity,
                         "is_early_exit": is_early_exit,
                         "early_exit_message": early_exit_message,
+                        "early_exit_reason": early_exit_message,
                         "entry_time": entry_time_str,
                         "exit_time": current_time.isoformat(),
                         "objectId": existing_attendance.get("objectId")
@@ -134,11 +119,13 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                     attendance_data = {
                         "action": "exit",
                         "employee_id": employee.get("employee_id"),
-                        "employee_name": employee.get("name"),
+                        "employee_name": employee_name,
+                        "name": employee_name,  # Explicitly include name for frontend
                         "timestamp": current_time.isoformat(),
                         "similarity": rounded_similarity,
                         "is_early_exit": is_early_exit,
                         "early_exit_message": early_exit_message,
+                        "early_exit_reason": early_exit_message,
                         "entry_time": entry_time_str,
                         "exit_time": current_time.isoformat(),
                         "objectId": existing_attendance.get("objectId")
@@ -147,7 +134,7 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                     result["processed_employee"] = {
                         **attendance_data, 
                         "message": "Auto-exit marked successfully", 
-                        "name": employee.get("name")
+                        "name": employee_name
                     }
                     result["attendance_update"] = attendance_data
                     
@@ -162,81 +149,60 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                         }
                     })
                     
-                    result["processed_employee"] = {
-                        "message": f"Attendance already marked (detected again)", 
-                        "name": employee.get("name"),
+                    # Create a response without creating a new database entry
+                    attendance_data = {
+                        "action": "update",  # Changed from "entry" to "update" to indicate it's just an update
                         "employee_id": employee.get("employee_id"),
+                        "employee_name": employee_name,
+                        "name": employee_name,  # Explicitly include name for frontend
                         "timestamp": existing_attendance.get("timestamp", {}).get("iso"),
                         "similarity": rounded_similarity,
                         "entry_time": entry_time_str,
-                        "exit_time": None
+                        "exit_time": None,
+                        "objectId": existing_attendance.get("objectId")
                     }
+                    
+                    result["processed_employee"] = {
+                        **attendance_data,
+                        "message": f"Attendance already marked (detected again)", 
+                        "name": employee_name
+                    }
+                    
+                    # Important: Only set attendance_update for actual changes to attendance
+                    # This prevents duplicate broadcasts for streaming updates
+                    # result["attendance_update"] = attendance_data
                     
                     return result
         else:
             # If there's already an exit time for today, just return the info
-            result["processed_employee"] = {
-                "message": "Attendance complete for today",
-                "name": employee.get("name"),
+            attendance_data = {
+                "action": "info",  # Changed to indicate this is just informational
                 "employee_id": employee.get("employee_id"),
+                "employee_name": employee_name,
+                "name": employee_name,  # Explicitly include name for frontend
                 "timestamp": existing_attendance.get("timestamp", {}).get("iso"),
                 "similarity": rounded_similarity,
                 "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
-                "exit_time": existing_attendance.get("exit_time", {}).get("iso")
+                "exit_time": existing_attendance.get("exit_time", {}).get("iso"),
+                "objectId": existing_attendance.get("objectId")
             }
+            
+            result["processed_employee"] = {
+                **attendance_data,
+                "message": "Attendance complete for today"
+            }
+            
+            # Don't set attendance_update since this is just an info check, not a change
+            # result["attendance_update"] = attendance_data
+            
             return result
 
     # New entry logic for employees without existing attendance
-    is_late = False
-    late_message = None
-    minutes_late = None
-    time_components = None
-    
-    # Get employee shift information
-    login_time = None
-    grace_period_end = None
-    shift_id = employee.get("shift")
-    
-    if shift_id and isinstance(shift_id, dict) and shift_id.get("objectId"):
-        # Get shift details using the pointer
-        shift = db_query("Shift", 
-            where={"objectId": shift_id.get("objectId")},
-            limit=1
-        )
-        shift = shift[0] if shift else None
-        
-        if shift and shift.get("login_time"):
-            # Parse login_time from string
-            login_time_str = shift.get("login_time")
-            login_time_hours, login_time_minutes = map(int, login_time_str.split(":"))
-            
-            # Get grace period from shift (default to 0 if not set)
-            grace_period = shift.get("grace_period", 60)
-            
-            # Convert login_time to timezone-aware datetime for today
-            login_time = datetime.combine(today, 
-                                        datetime.min.time().replace(hour=login_time_hours, 
-                                                                    minute=login_time_minutes))
-            login_time = convert_to_local_time(login_time)
-            
-            # Add grace period to login time
-            login_time_with_grace = login_time + timedelta(minutes=grace_period)
-            
-            logger.info(f"Login time: {login_time}")
-            logger.info(f"Grace period: {grace_period} minutes")
-            logger.info(f"Login time with grace: {login_time_with_grace}")
-            logger.info(f"Current time: {current_time}")
-            
-            # Check if the current time is after the login time + grace period
-            if current_time > login_time_with_grace:
-                is_late = True
-                late_minutes = int((current_time - login_time).total_seconds() / 60)
-                time_components = {
-                    "hours": late_minutes // 60,
-                    "minutes": late_minutes % 60,
-                    "seconds": int((current_time - login_time).total_seconds()) % 60
-                }
-                late_message = f"Late by {late_minutes} minutes (Shift start time: {login_time.strftime('%H:%M')})"
+    # Use the improved Attendance model method to check for late arrival
+    is_late, late_message, late_minutes, time_components = attendance_model.check_late_arrival(
+        employee.get("employee_id"), 
+        entry_time=current_time
+    )
 
     # Create new attendance record
     new_attendance_data = {
@@ -271,9 +237,9 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     
     # Prepare data for email notification
     notification_data = {
-        "name": employee.get("name"),
+        "name": employee_name,
         "employee_id": employee.get("employee_id"),
-        "employee_name": employee.get("name"),
+        "employee_name": employee_name,
         "timestamp": current_time.isoformat(),
         "similarity": rounded_similarity,
         "is_late": is_late,
@@ -288,21 +254,43 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     if is_late:
         message += f" - {late_message}"
         send_late_entry_notification(notification_data, employee.get("email"))
-    elif login_time:
-        message += f" - On time (Shift start time: {login_time.strftime('%H:%M')})"
+    else:
+        # Get shift information for a better message
+        shift_id = employee.get("shift")
+        
+        if shift_id and isinstance(shift_id, dict) and shift_id.get("objectId"):
+            # Get shift details
+            shift = db_query("Shift", where={"objectId": shift_id.get("objectId")}, limit=1)
+            
+            if shift and shift[0].get("login_time"):
+                login_time_str = shift[0].get("login_time")
+                message += f" - On time (Shift start: {login_time_str})"
+            else:
+                message += " - On time for your shift"
+        else:
+            # Check office timings
+            office_timings = db_query("OfficeTiming", limit=1)
+            
+            if office_timings and office_timings[0].get("login_time"):
+                login_time_str = office_timings[0].get("login_time")
+                message += f" - On time (Office hours start: {login_time_str})"
+            else:
+                message += " - On time for your shift"
+        
         send_entry_notification(notification_data, employee.get("email"))
     
     attendance_data = {
         "action": "entry",
         "employee_id": employee.get("employee_id"),
-        "employee_name": employee.get("name"),
+        "employee_name": employee_name,
+        "name": employee_name,  # Explicitly include name for frontend
         "timestamp": current_time.isoformat(),
         "similarity": rounded_similarity,
         "is_late": is_late,
         "late_message": late_message,
         "entry_time": current_time.isoformat(),
         "exit_time": None,
-        "minutes_late": minutes_late if is_late else None,
+        "minutes_late": late_minutes if is_late else None,
         "time_components": time_components if is_late else None,
         "objectId": new_attendance.get("objectId")
     }
@@ -391,10 +379,14 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
             employee = match['employee']
             similarity = match['similarity']
             
+            # Ensure employee information is complete
+            if not employee.get('name'):
+                logger.warning(f"Employee with ID {employee.get('employee_id')} has missing name. Full employee data: {employee}")
+            
             # Format similarity as percentage for display
             similarity_percent = round(similarity * 100, 1) if isinstance(similarity, float) else similarity
             
-            logger.info(f"Detected employee {employee.get('name')} (ID: {employee.get('employee_id')}) with confidence {similarity_percent}%")
+            logger.info(f"Detected employee {employee.get('name', 'Unknown')} (ID: {employee.get('employee_id', 'Unknown')}) with confidence {similarity_percent}%")
             
             # Update last recognized employees
             last_recognized_employees[employee.get("employee_id")] = {
@@ -411,9 +403,17 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
                 if result["processed_employee"]:
                     # Add additional data helpful for real-time display
                     processed_employee = result["processed_employee"]
+                    
+                    # Ensure employee name is present in processed_employee
+                    if not processed_employee.get('name') and employee.get('name'):
+                        processed_employee["name"] = employee.get('name')
+                        
                     processed_employee["similarity_percent"] = similarity_percent
                     processed_employee["detection_time"] = current_time.isoformat()
                     processed_employee["is_streaming"] = True
+                    
+                    # Log processed employee for debugging
+                    logger.debug(f"Processed employee for client {client_id}: {processed_employee}")
                     
                     processed_employees.append(processed_employee)
                 
@@ -421,6 +421,11 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
                     # Add additional confidence information
                     result["attendance_update"]["confidence_percent"] = similarity_percent
                     result["attendance_update"]["detection_time"] = current_time.isoformat()
+                    
+                    # Ensure employee name is present in attendance update too
+                    if not result["attendance_update"].get('name') and employee.get('name'):
+                        result["attendance_update"]["name"] = employee.get('name')
+                        
                     attendance_updates.append(result["attendance_update"])
             except Exception as e:
                 logger.error(f"Error processing attendance for employee {employee.get('employee_id')}: {str(e)}")
