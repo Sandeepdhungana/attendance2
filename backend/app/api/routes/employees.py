@@ -167,6 +167,36 @@ async def register_employee(
                 status_code=400,
                 detail="Employee ID already registered"
             )
+            
+        # Check if this face is already registered by comparing with existing employees
+        all_employees = employee_model.query()
+        
+        # Convert single embedding to list for find_matches_for_embeddings
+        face_embeddings = [embedding]
+        
+        # Find matches with similarity > 0.6
+        face_similarity_threshold = 0.6
+        matches = face_recognition.find_matches_for_embeddings(
+            face_embeddings, all_employees, threshold=face_similarity_threshold
+        )
+        
+        if matches:
+            # If we found a matching face with similarity > 0.6
+            match = matches[0]  # Get the best match
+            similar_employee = match['employee']
+            similarity = match['similarity']
+            similarity_percent = round(similarity * 100, 1)
+            
+            logger.info(f"Face similarity match found: {similar_employee.get('name')} with {similarity_percent}% similarity")
+            
+            try:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Face already registered to employee {similar_employee.get('name')} (ID: {similar_employee.get('employee_id')}) with {similarity_percent}% similarity"
+                )
+            except HTTPException:
+                # Re-raise HTTPExceptions to preserve status code and details
+                raise
 
         # Create new employee
         new_employee = employee_model.create({
@@ -199,6 +229,10 @@ async def register_employee(
         logger.info(f"Employee registered successfully: {employee_id} ({name})")
         return {"message": "Employee registered successfully"}
 
+    except HTTPException as he:
+        # Re-raise HTTP exceptions to preserve status code and details
+        logger.error(f"HTTP error during employee registration: {str(he)}")
+        raise
     except Exception as e:
         logger.error(f"Error registering employee: {str(e)}")
         raise HTTPException(

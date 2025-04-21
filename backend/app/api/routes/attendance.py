@@ -355,6 +355,33 @@ async def register_employee(
             raise HTTPException(
                 status_code=400, detail="No face detected in image")
 
+        # Check if this face is already registered by comparing with existing employees
+        all_employees = query("Employee")
+        
+        # Find matches with similarity > 0.6
+        face_similarity_threshold = 0.6
+        matches = face_recognition.find_matches_for_embeddings(
+            face_embeddings, all_employees, threshold=face_similarity_threshold
+        )
+        
+        if matches:
+            # If we found a matching face with similarity > 0.6
+            match = matches[0]  # Get the best match
+            similar_employee = match['employee']
+            similarity = match['similarity']
+            similarity_percent = round(similarity * 100, 1)
+            
+            logger.info(f"Face similarity match found: {similar_employee.get('name')} with {similarity_percent}% similarity")
+            
+            try:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Face already registered to employee {similar_employee.get('name')} (ID: {similar_employee.get('employee_id')}) with {similarity_percent}% similarity"
+                )
+            except HTTPException:
+                # Re-raise HTTPExceptions to preserve status code and details
+                raise
+
         # Convert embedding to string for storage
         embedding_str = ",".join(map(str, face_embeddings[0]))
 
@@ -381,7 +408,12 @@ async def register_employee(
             "message": "Employee registered successfully",
             "employee": result
         }
+    except HTTPException as he:
+        # Re-raise HTTP exceptions with appropriate status code
+        logger.error(f"HTTP error during employee registration: {str(he)}")
+        raise
     except Exception as e:
+        # Log and convert other exceptions to 500
         logger.error(f"Error registering employee: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 

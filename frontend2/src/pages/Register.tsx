@@ -21,6 +21,7 @@ import {
   Stack,
   Switch,
   FormControlLabel,
+  CircularProgress,
 } from '@mui/material';
 import { PersonAdd, Save, Badge } from '@mui/icons-material';
 import { useWebSocket } from '../App';
@@ -53,6 +54,7 @@ const Register: React.FC = () => {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { sendMessage } = useWebSocket();
 
   const {
@@ -72,6 +74,20 @@ const Register: React.FC = () => {
   useEffect(() => {
     fetchShifts();
   }, []);
+
+  // Auto-clear messages after 10 seconds
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (error || success) {
+      timer = setTimeout(() => {
+        if (error) setError(null);
+        if (success) setSuccess(null);
+      }, 10000);
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [error, success]);
 
   const fetchShifts = async () => {
     try {
@@ -119,24 +135,29 @@ const Register: React.FC = () => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
+    setIsSubmitting(true);
 
     if (!employee_id || !name || !department || !position || !shift_id) {
       setError('Please fill in all required fields');
+      setIsSubmitting(false);
       return;
     }
 
     if (phone && !validatePhone(phone)) {
       setError('Please enter a valid phone number');
+      setIsSubmitting(false);
       return;
     }
 
     if (email && !validateEmail(email)) {
       setError('Please enter a valid email address');
+      setIsSubmitting(false);
       return;
     }
 
     if (!image) {
       setError('Please capture or upload a photo');
+      setIsSubmitting(false);
       return;
     }
 
@@ -175,12 +196,12 @@ const Register: React.FC = () => {
       formData.append('position', position);
       formData.append('status', status);
       formData.append('shift_id', shift_id);
-      formData.append('phone', phone);
+      formData.append('phone_number', phone);
       formData.append('email', email);
       formData.append('is_admin', isAdmin.toString());
       formData.append('image', imageFile);
 
-      await api.post('/employees/register', formData, {
+      await api.post('/register', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -197,9 +218,27 @@ const Register: React.FC = () => {
       setEmail('');
       setIsAdmin(false);
       setImage(null);
-    } catch (err) {
-      setError('Failed to register employee. Please try again.');
+    } catch (err: any) {
       console.error('Registration error:', err);
+      
+      // Handle axios error response data
+      if (err.response && err.response.data) {
+        console.log('Error response data:', err.response.data);
+        console.log('Error status:', err.response.status);
+        
+        const errorDetail = err.response.data.detail;
+        
+        // Check if the error contains face similarity information
+        if (typeof errorDetail === 'string' && errorDetail.includes('Face already registered')) {
+          setError(errorDetail);
+        } else {
+          setError(errorDetail || 'Failed to register employee. Please try again.');
+        }
+      } else {
+        setError('Failed to register employee. Please try again.');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -229,10 +268,12 @@ const Register: React.FC = () => {
             borderRadius: 2,
             '& .MuiAlert-icon': {
               alignItems: 'center'
-            }
+            },
+            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
           }}
+          onClose={() => setError(null)}
         >
-          {error}
+          <Typography variant="body1" sx={{ fontWeight: 500 }}>{error}</Typography>
         </Alert>
       )}
 
@@ -244,8 +285,10 @@ const Register: React.FC = () => {
             borderRadius: 2,
             '& .MuiAlert-icon': {
               alignItems: 'center'
-            }
+            },
+            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
           }}
+          onClose={() => setSuccess(null)}
         >
           {success}
         </Alert>
@@ -527,28 +570,37 @@ const Register: React.FC = () => {
                 variant="contained"
                 color="primary"
                 size="large"
-                startIcon={<Save />}
+                startIcon={!isSubmitting && <Save />}
+                disabled={isSubmitting}
                 sx={{ 
                   px: 4, 
                   py: 1.2,
                   borderRadius: 2,
                   textTransform: 'none',
                   fontWeight: 600,
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                  minWidth: 200,
+                  position: 'relative'
                 }}
               >
-                Register Employee
+                {isSubmitting ? (
+                  <>
+                    <CircularProgress 
+                      size={20} 
+                      color="inherit" 
+                      sx={{ 
+                        position: 'absolute',
+                        left: 24
+                      }} 
+                    />
+                    Registering...
+                  </>
+                ) : 'Register Employee'}
               </Button>
             </Box>
           </form>
         </CardContent>
       </Card>
-      
-      <Snackbar 
-        open={!!success || !!error} 
-        autoHideDuration={6000} 
-        onClose={() => { setSuccess(null); setError(null); }}
-      />
     </Box>
   );
 }
