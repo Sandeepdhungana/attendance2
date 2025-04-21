@@ -36,7 +36,6 @@ def get_attendance_records() -> List[Dict[str, Any]]:
         "updated_at": att["updatedAt"]
     } for att in attendances]
 
-    results = []
 
 
   
