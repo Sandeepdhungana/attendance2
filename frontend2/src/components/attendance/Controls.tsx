@@ -62,45 +62,9 @@ export const Controls: React.FC<ControlsProps> = ({
           style={{ display: 'none' }}
           id="video-upload"
         />
-        <label htmlFor="video-upload">
-          <Button
-            variant="outlined"
-            component="span"
-            startIcon={<CloudUploadIcon />}
-            sx={{ 
-              borderRadius: 2,
-              py: 1.2,
-              px: 2,
-              textTransform: 'none',
-              fontWeight: 600,
-              borderColor: alpha(theme.palette.primary.main, 0.3),
-              '&:hover': {
-                borderColor: alpha(theme.palette.primary.main, 0.5),
-                backgroundColor: alpha(theme.palette.primary.main, 0.05),
-              }
-            }}
-          >
-            Upload Video
-          </Button>
-        </label>
+     
         
-        <Button
-          variant="contained"
-          color="primary"
-          onClick={isVideoMode ? startVideoStream : capture}
-          disabled={isCapturing || isStreaming || (!isVideoMode && !webcamRef.current) || (isVideoMode && !videoFile)}
-          startIcon={<PersonAddIcon />}
-          sx={{ 
-            borderRadius: 2,
-            py: 1.2,
-            px: 3,
-            textTransform: 'none',
-            fontWeight: 600,
-            boxShadow: `0 4px 12px ${alpha(theme.palette.primary.main, 0.2)}`,
-          }}
-        >
-          {isCapturing ? 'Processing...' : 'Mark Attendance'}
-        </Button>
+       
         
         {!isVideoMode && (
           <Button
