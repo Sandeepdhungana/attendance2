@@ -31,7 +31,7 @@ from app.utils.websocket import (
 from app.utils.processing import process_image_in_process, process_attendance_for_employee
 from app.utils.time_utils import get_local_time
 from app.config import IMAGES_DIR, MAX_CONCURRENT_TASKS_PER_CLIENT
-from app.database import db_query
+
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 def fetch_attendance():
                     attendance_records = query("Attendance")
                     return [{
-                        "name": db_query("Employee", where={"employee_id": att["employee_id"]}, limit=1)[0].get("name"),
+                        "name": query("Employee", where={"employee_id": att["employee_id"]}, limit=1)[0].get("name"),
                         "objectId": att["objectId"],
                         # Set id to employee_id for consistency with websocket
                         "id": att["employee_id"],
