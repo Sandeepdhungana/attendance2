@@ -260,40 +260,6 @@ const Register: React.FC = () => {
         </Typography>
       </Box>
 
-      {error && (
-        <Alert 
-          severity="error" 
-          sx={{ 
-            mb: 3,
-            borderRadius: 2,
-            '& .MuiAlert-icon': {
-              alignItems: 'center'
-            },
-            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-          }}
-          onClose={() => setError(null)}
-        >
-          <Typography variant="body1" sx={{ fontWeight: 500 }}>{error}</Typography>
-        </Alert>
-      )}
-
-      {success && (
-        <Alert 
-          severity="success" 
-          sx={{ 
-            mb: 3,
-            borderRadius: 2,
-            '& .MuiAlert-icon': {
-              alignItems: 'center'
-            },
-            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-          }}
-          onClose={() => setSuccess(null)}
-        >
-          {success}
-        </Alert>
-      )}
-
       <Card 
         sx={{ 
           borderRadius: 3,
@@ -563,7 +529,8 @@ const Register: React.FC = () => {
               backgroundColor: alpha(theme.palette.background.default, 0.6),
               borderTop: `1px solid ${alpha(theme.palette.divider, 0.7)}`,
               display: 'flex', 
-              justifyContent: 'flex-end'
+              flexDirection: 'column',
+              alignItems: 'flex-end'
             }}>
               <Button
                 type="submit"
@@ -597,6 +564,41 @@ const Register: React.FC = () => {
                   </>
                 ) : 'Register Employee'}
               </Button>
+              
+              {/* Alert messages moved below the button */}
+              <Box sx={{ width: '100%', mt: 2 }}>
+                {error && (
+                  <Alert 
+                    severity="error" 
+                    sx={{ 
+                      borderRadius: 2,
+                      '& .MuiAlert-icon': {
+                        alignItems: 'center'
+                      },
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                    }}
+                    onClose={() => setError(null)}
+                  >
+                    <Typography variant="body1" sx={{ fontWeight: 500 }}>{error}</Typography>
+                  </Alert>
+                )}
+
+                {success && (
+                  <Alert 
+                    severity="success" 
+                    sx={{ 
+                      borderRadius: 2,
+                      '& .MuiAlert-icon': {
+                        alignItems: 'center'
+                      },
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                    }}
+                    onClose={() => setSuccess(null)}
+                  >
+                    {success}
+                  </Alert>
+                )}
+              </Box>
             </Box>
           </form>
         </CardContent>

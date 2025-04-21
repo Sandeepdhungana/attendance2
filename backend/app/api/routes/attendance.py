@@ -332,7 +332,6 @@ async def register_employee(
         # Get face embedding
         face_recognition = get_face_recognition()
         embedding = face_recognition.get_embedding(img)
-        logger.info(f"Embedding: {embedding}")
         if embedding is None:
             raise HTTPException(
                 status_code=400, detail="No face detected in image")
