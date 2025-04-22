@@ -47,7 +47,7 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
       wsRef.current = null;
     }
 
-    const ws = new WebSocket('ws://localhost:8000/ws/attendance');
+    const ws = new WebSocket('/ws/attendance');
     wsRef.current = ws;
 
     ws.onopen = () => {
