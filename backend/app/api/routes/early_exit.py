@@ -1,17 +1,16 @@
 from fastapi import APIRouter, HTTPException
-from ..database import query, create, update, delete
-from .. import models
-from ..utils.websocket import broadcast_attendance_update
-from ..utils.time_utils import get_local_time
+from ...database import query, create, update, delete
+from ...utils.websocket import broadcast_attendance_update
+from ...utils.time_utils import get_local_time
 import logging
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
 class EarlyExitRequest(BaseModel):
-    attendance_id: int
+    attendance_id: str  # Changed from int to str to clarify this is the objectId
     reason: str
-    employee_id: Optional[str] = None  # Make employee_id optional
+    employee_id: Optional[str] = None  # Optional employee ID for additional verification
 
 class EmployeeEarlyExitRequest(BaseModel):
     employee_id: str
@@ -36,16 +35,52 @@ def create_pointer(class_name, object_id):
     }
 
 @router.post("/early-exit-reason")
-async def submit_employee_early_exit_reason(request: EmployeeEarlyExitRequest):
-    """Submit reason for early exit using employee_id instead of attendance_id"""
+async def submit_early_exit_reason(request: EarlyExitRequest):
+    """Submit reason for early exit"""
     try:
-        employee_id = request.employee_id
+        # Get parameters from request
+        attendance_objectid = request.attendance_id  # This is the actual objectId of the attendance record
         reason = request.reason
+        provided_employee_id = request.employee_id  # This is optional for verification
         
-        logger.info(f"Received early exit reason submission by employee_id - employee_id: {employee_id}, reason: {reason}")
-        print("The employee id is ", employee_id, "and the reason is ", reason)
-        if not employee_id or not reason:
+        logger.info(f"Received early exit reason submission - attendance_objectid: {attendance_objectid}, reason: {reason}, provided_employee_id: {provided_employee_id}")
+        
+        if not attendance_objectid or not reason:
             raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        # Additional validation for the attendance_objectid format
+        # Back4App objectIds are typically 10-character strings, while employee IDs are often numeric
+        # This helps detect when an employee ID was incorrectly used as an attendance ID
+        if attendance_objectid.isdigit() and len(attendance_objectid) <= 5:
+            logger.warning(f"The provided attendance_id '{attendance_objectid}' appears to be a numeric ID, which may be an employee ID rather than an objectId")
+            
+            # Check if this matches an employee ID
+            if provided_employee_id and attendance_objectid == provided_employee_id:
+                logger.error(f"The provided attendance_id '{attendance_objectid}' is the same as the employee_id - this is definitely incorrect")
+                raise HTTPException(status_code=400, detail="Invalid attendance ID: This appears to be an employee ID, not an attendance record ID")
+        
+        # Find the attendance record by objectId
+        attendance_records = query("Attendance", where={"objectId": attendance_objectid}, limit=1)
+        logger.info(f"Query result for attendance where objectId={attendance_objectid}: Found {len(attendance_records) if attendance_records else 0} records")
+        
+        if not attendance_records or len(attendance_records) == 0:
+            logger.error(f"Attendance record not found with objectId: {attendance_objectid}")
+            raise HTTPException(status_code=404, detail=f"Attendance record not found with ID: {attendance_objectid}")
+        
+        # Get the attendance record
+        attendance = attendance_records[0]
+        logger.info(f"Found attendance record: {attendance.get('objectId')} for employee: {attendance.get('employee_id')}")
+        
+        # Get the employee_id from the attendance record
+        employee_id = attendance.get("employee_id")
+        if not employee_id:
+            logger.error(f"Employee ID missing in attendance record: {attendance}")
+            raise HTTPException(status_code=400, detail="Invalid attendance record (missing employee_id)")
+        
+        # If employee_id was provided in the request, verify it matches the attendance record
+        if provided_employee_id and provided_employee_id != employee_id:
+            logger.warning(f"Provided employee_id {provided_employee_id} doesn't match attendance record employee_id {employee_id}")
+            # We'll continue with the employee_id from the attendance record but log this discrepancy
         
         # Get employee info
         employee_records = query("Employee", where={"employee_id": employee_id}, limit=1)
@@ -66,35 +101,10 @@ async def submit_employee_early_exit_reason(request: EmployeeEarlyExitRequest):
             logger.error(f"Employee object ID missing in employee record: {employee_record}")
             raise HTTPException(status_code=400, detail="Invalid employee record (missing objectId)")
         
-        # Find the most recent attendance record for this employee
-        # Order by created_at in descending order to get the most recent
-        attendance_records = query(
-            "Attendance", 
-            where={"employee_id": employee_id}, 
-            order="-created_at",
-            limit=1
-        )
-        
-        if not attendance_records or len(attendance_records) == 0:
-            logger.error(f"No attendance records found for employee: {employee_id}")
-            raise HTTPException(status_code=404, detail="No attendance records found for this employee")
-        
-        # Safely access the first attendance record
-        attendance = attendance_records[0]
-        if not isinstance(attendance, dict):
-            logger.error(f"Unexpected attendance record format: {type(attendance)}")
-            raise HTTPException(status_code=500, detail="Internal server error: Invalid attendance data format")
-            
-        attendance_id = attendance.get("objectId")
-        
-        if not attendance_id:
-            logger.error(f"Attendance object ID missing in record: {attendance}")
-            raise HTTPException(status_code=400, detail="Invalid attendance record (missing objectId)")
-        
         # Check if there's exit time - you can only submit early exit reason for records with exit time
         exit_time = attendance.get("exit_time", {})
         if not exit_time or not isinstance(exit_time, dict) or not exit_time.get("iso"):
-            logger.error(f"No exit time found for attendance record: {attendance_id}")
+            logger.error(f"No exit time found for attendance record: {attendance_objectid}")
             raise HTTPException(status_code=400, detail="Cannot submit early exit reason for attendance without exit time")
         
         current_time = get_local_time()
@@ -142,22 +152,22 @@ async def submit_employee_early_exit_reason(request: EmployeeEarlyExitRequest):
                             is_early_exit = True
                             
                             # Update the attendance record to mark it as early exit
-                            update("Attendance", attendance_id, {
+                            update("Attendance", attendance_objectid, {
                                 "is_early_exit": True,
                                 "updated_at": {
                                     "__type": "Date",
                                     "iso": current_time.isoformat()
                                 }
                             })
-                            logger.info(f"Updated attendance record {attendance_id} to mark as early exit")
+                            logger.info(f"Updated attendance record {attendance_objectid} to mark as early exit")
                     except Exception as e:
                         logger.error(f"Error checking if exit was early: {str(e)}")
         
         # Create early exit reason
         early_exit_data = {
             "employee_id": employee_id,
-            "attendance_id": str(attendance_id),
-            "attendance": create_pointer("Attendance", attendance_id),
+            "attendance_id": attendance_objectid,
+            "attendance": create_pointer("Attendance", attendance_objectid),
             "employee": create_pointer("Employee", employee_object_id),
             "reason": reason,
             "created_at": format_date(current_time),
@@ -178,17 +188,17 @@ async def submit_employee_early_exit_reason(request: EmployeeEarlyExitRequest):
             "action": "early_exit_reason",
             "employee_id": employee_id,
             "name": employee_name,
-            "attendance_id": str(attendance_id),
+            "attendance_id": attendance_objectid,
             "timestamp": current_time.isoformat(),
             "reason": reason,
             "is_early_exit": is_early_exit,
             "objectId": new_reason.get("objectId")
         })
         
-        logger.info(f"Early exit reason submitted successfully for employee {employee_id}")
+        logger.info(f"Early exit reason submitted successfully for employee {employee_id}, attendance {attendance_objectid}")
         return {
             "message": "Early exit reason submitted successfully", 
-            "attendance_id": str(attendance_id),
+            "attendance_id": attendance_objectid,
             "is_early_exit": is_early_exit
         }
     except Exception as e:
@@ -295,4 +305,58 @@ async def delete_early_exit_reason(reason_id: str):
         return {"message": "Early exit reason deleted successfully"}
     except Exception as e:
         logger.error(f"Error deleting early exit reason: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/employee-early-exit")
+async def submit_employee_early_exit(request: EmployeeEarlyExitRequest):
+    """Submit reason for early exit by employee ID"""
+    try:
+        # Get parameters from request
+        employee_id = request.employee_id
+        reason = request.reason
+        
+        logger.info(f"Received employee early exit reason - employee_id: {employee_id}, reason: {reason}")
+        
+        if not employee_id or not reason:
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        # Find the employee
+        employee_records = query("Employee", where={"employee_id": employee_id}, limit=1)
+        if not employee_records or len(employee_records) == 0:
+            logger.error(f"Employee not found with ID: {employee_id}")
+            raise HTTPException(status_code=404, detail="Employee not found")
+        
+        # Find the most recent attendance record for this employee
+        # Order by createdAt in descending order to get the latest
+        attendance_records = query("Attendance", 
+                                  where={"employee_id": employee_id}, 
+                                  order="-createdAt", 
+                                  limit=1)
+        
+        if not attendance_records or len(attendance_records) == 0:
+            logger.error(f"No attendance records found for employee: {employee_id}")
+            raise HTTPException(status_code=404, detail="No attendance records found for this employee")
+        
+        # Get the latest attendance record
+        attendance = attendance_records[0]
+        attendance_objectid = attendance.get("objectId")
+        
+        if not attendance_objectid:
+            logger.error(f"Invalid attendance record (missing objectId): {attendance}")
+            raise HTTPException(status_code=500, detail="Invalid attendance record")
+        
+        logger.info(f"Found attendance record: {attendance_objectid} for employee: {employee_id}")
+        
+        # Now create an EarlyExitRequest and forward to the main handler
+        early_exit_request = EarlyExitRequest(
+            attendance_id=attendance_objectid,
+            reason=reason,
+            employee_id=employee_id
+        )
+        
+        # Call the main handler with our new request
+        return await submit_early_exit_reason(early_exit_request)
+        
+    except Exception as e:
+        logger.error(f"Error submitting employee early exit reason: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e)) 

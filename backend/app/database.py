@@ -2,7 +2,6 @@ import requests
 import os
 import logging
 import json
-import time
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from app.config import BACK4APP_APPLICATION_ID, BACK4APP_REST_API_KEY, BACK4APP_SERVER_URL, BACK4APP_MASTER_KEY

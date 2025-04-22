@@ -1,12 +1,9 @@
 import numpy as np
-import insightface
 from insightface.app import FaceAnalysis
-import cv2
 import json
 import logging
 import concurrent.futures
 from typing import List, Dict, Any, Tuple
-import threading
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

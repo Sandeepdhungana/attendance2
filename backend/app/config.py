@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=os.path.join(current_dir, '.env'))
 PING_INTERVAL = 30  # seconds
 PING_TIMEOUT = 60  # seconds
 MAX_FRAMES_PER_SECOND = 1
-MAX_CONCURRENT_TASKS_PER_CLIENT = 2
+MAX_CONCURRENT_TASKS_PER_CLIENT = 1
 
 # Cache settings
 USER_CACHE_TTL = 300  # 5 minutes

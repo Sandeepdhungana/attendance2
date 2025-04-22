@@ -1,6 +1,6 @@
 from . import create_app
 from .api import router as api_router
-from .api.routes import attendance, employees, office_timings, timezone, websocket
+from .api.routes import attendance, employees, timezone, websocket, early_exit
 from .utils.websocket import process_queue, process_websocket_responses
 from .dependencies import process_pool
 from .database import query, create, create_class_schema
@@ -27,9 +27,9 @@ app.add_middleware(
 app.include_router(api_router)
 app.include_router(attendance.router, tags=["attendance"])
 app.include_router(employees.router, tags=["employees"])
-app.include_router(office_timings.router, tags=["office-timings"])
 app.include_router(timezone.router, tags=["timezone"])
 app.include_router(websocket.router, tags=["websocket"])
+app.include_router(early_exit.router, tags=["early-exit"])
 
 
 def initialize_back4app():

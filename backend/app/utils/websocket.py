@@ -37,16 +37,25 @@ async def broadcast_attendance_update(attendance_data: Dict[str, Any]):
     else:
         data_list = [attendance_data]
     
-    # Don't broadcast streaming detections - they're only for the requesting client
+    # Don't broadcast streaming detections or non-actionable updates
     non_streaming_updates = []
     for data in data_list:
-        if not data.get("is_streaming", False):
-            # Ensure objectId is included if this is a deletion
-            if data.get("action") == "delete" and "objectId" not in data:
-                logger.warning("Missing objectId in delete attendance update")
-                if "attendance_id" in data:
-                    data["objectId"] = data["attendance_id"]
-            non_streaming_updates.append(data)
+        # Skip updates with is_streaming flag
+        if data.get("is_streaming", False):
+            continue
+            
+        # Skip updates with action "update" or "info" - these don't represent actual changes
+        if data.get("action") in ["update", "info"]:
+            continue
+            
+        # Ensure objectId is included if this is a deletion
+        if data.get("action") == "delete" and "objectId" not in data:
+            logger.warning("Missing objectId in delete attendance update")
+            if "attendance_id" in data:
+                data["objectId"] = data["attendance_id"]
+                
+        # Add to broadcast list
+        non_streaming_updates.append(data)
     
     if not non_streaming_updates:
         return
@@ -299,11 +308,36 @@ def handle_future_completion(future, client_id):
                 
                 confidence_str = f"{confidence_percent}%"
                 
+                # Improved name extraction from user data
+                employee_id = user.get('employee_id', '')
+                employee_name = user.get('name', '')
+                
+                # If name is still empty, try other possible fields
+                if not employee_name:
+                    if user.get('employee_name'):
+                        employee_name = user.get('employee_name')
+                    elif 'message' in user and 'detected' in user['message'].lower():
+                        # Try to extract name from message if it contains "detected"
+                        parts = user['message'].split(':')
+                        if len(parts) > 1:
+                            employee_name = parts[1].strip()
+                
+                # If we still don't have a name but have an ID, fetch from last_recognized_users
+                if not employee_name and employee_id and employee_id in last_recognized_users:
+                    employee_data = last_recognized_users[employee_id].get('employee', {})
+                    if employee_data.get('name'):
+                        employee_name = employee_data.get('name')
+                
+                # Finally, if all else fails, use "Unknown"
+                if not employee_name:
+                    logger.warning(f"Could not determine name for employee ID {employee_id}. User data: {user}")
+                    employee_name = "Unknown"
+                
                 # Create real-time detection notification
                 real_time_detection = {
                     "type": "real_time_detection",
-                    "name": user.get('name', 'Unknown'),
-                    "employee_id": user.get('employee_id', 'Unknown'),
+                    "name": employee_name,
+                    "employee_id": employee_id,
                     "confidence": confidence,
                     "confidence_percent": confidence_percent,
                     "confidence_str": confidence_str,
@@ -314,10 +348,10 @@ def handle_future_completion(future, client_id):
                 # Add to notifications to be queued
                 real_time_notifications.append(real_time_detection)
                 
-                logger.info(f"Created real-time detection for {user.get('name', 'Unknown')} ({user.get('employee_id', 'Unknown')}) - Confidence: {confidence_str}")
+                logger.info(f"Created real-time detection for {employee_name} ({employee_id}) - Confidence: {confidence_str}")
                 
                 # Also add user-friendly notification
-                notification_msg = f"Detected: {user.get('name', 'Unknown')} (ID: {user.get('employee_id', 'Unknown')}) - Confidence: {confidence_str}"
+                notification_msg = f"Detected: {employee_name} (ID: {employee_id}) - Confidence: {confidence_str}"
                 status_type = "success" if confidence >= 0.7 else "warning"  # Warning for lower confidence
                 
                 # Queue notification message
@@ -373,11 +407,24 @@ def handle_future_completion(future, client_id):
             })
         
         # Also put attendance updates in the processing results queue for broadcasting
+        # Filter out non-actionable updates to avoid duplicates
         if attendance_updates:
-            processing_results_queue.put({
-                "type": "attendance_update",
-                "data": attendance_updates
-            })
+            # Only broadcast attendance updates that represent actual changes
+            # Specifically, filter out updates with action "update" or "info"
+            actionable_updates = [
+                update for update in attendance_updates 
+                if update.get("action") not in ["update", "info"]
+                and not update.get("is_streaming", False)
+            ]
+            
+            if actionable_updates:
+                processing_results_queue.put({
+                    "type": "attendance_update",
+                    "data": actionable_updates
+                })
+                logger.info(f"Queued {len(actionable_updates)} actionable attendance updates for broadcasting")
+            else:
+                logger.info(f"No actionable attendance updates to broadcast")
             
     except Exception as e:
         logger.error(f"Error handling future completion for client {client_id}: {str(e)}")

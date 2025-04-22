@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 import pytz
 from ..database import query
 
@@ -29,7 +29,7 @@ def convert_to_local_time(dt):
         local_tz = pytz.timezone(timezone_config[0]["timezone_name"])
     else:
         # Default to IST if no configuration exists
-        local_tz = pytz.timezone("Asia/Kolkata")
+        local_tz = pytz.timezone("Asia/Dubai")
     
     if dt.tzinfo is None:
         dt = local_tz.localize(dt)

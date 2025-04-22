@@ -1,8 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
-from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, File, UploadFile, Form
+from typing import Optional
 from app.services.employee import get_employees, delete_employee
 from app.dependencies import get_face_recognition
-from app.utils.websocket import broadcast_attendance_update
 from app.utils.time_utils import get_local_time
 from app.dependencies import get_queues
 from app.models import Employee
