@@ -3,14 +3,17 @@ import { useWebSocket } from './useWebSocket';
 import { AttendanceRecord, User } from '../types/dashboard';
 import { DeleteDialogState } from '../types/deleteDialog';
 import api from '../api/config';
+import { format } from 'date-fns';
 
 export function useDashboard() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [filteredRecords, setFilteredRecords] = useState<AttendanceRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(true);
   const [usersLoading, setUsersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tabValue, setTabValue] = useState(0);
+  const [dateFilter, setDateFilter] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [userDeleteDialog, setUserDeleteDialog] = useState<DeleteDialogState<User>>({
     open: false,
     item: null,
@@ -39,7 +42,7 @@ export function useDashboard() {
       const attendanceResponse = await api.get('/attendance');
       console.log('Attendance data from API:', attendanceResponse.data);
       setRecords(attendanceResponse.data);
-
+      
       // Fetch users
       const usersResponse = await api.get('/employees');
       setUsers(usersResponse.data);
@@ -50,6 +53,33 @@ export function useDashboard() {
       setUsersLoading(false);
     }
   }, []);
+
+  // Fetch data by date
+  const fetchDataByDate = useCallback(async (date: string) => {
+    try {
+      setRecordsLoading(true);
+      setError(null);
+
+      // Fetch attendance records by date
+      const url = `/attendance/by-date/${date}`;
+      console.log(`Fetching attendance data for date: ${date} from ${url}`);
+      
+      const attendanceResponse = await api.get(url);
+      console.log('Attendance data by date from API:', attendanceResponse.data);
+      setFilteredRecords(attendanceResponse.data);
+    } catch (err) {
+      console.error('Error fetching attendance by date:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch attendance data for the selected date');
+      setFilteredRecords([]);
+    } finally {
+      setRecordsLoading(false);
+    }
+  }, []);
+
+  // Update filtered records whenever dateFilter changes
+  useEffect(() => {
+    fetchDataByDate(dateFilter);
+  }, [dateFilter, fetchDataByDate]);
 
   // Initial data fetch
   useEffect(() => {
@@ -68,6 +98,9 @@ export function useDashboard() {
           // Only update if we have new data
           if (data.data && Array.isArray(data.data)) {
             setRecords(data.data);
+            
+            // Also update filtered records if they match the current date filter
+            fetchDataByDate(dateFilter);
           }
           setRecordsLoading(false);
           setError(null);
@@ -101,6 +134,9 @@ export function useDashboard() {
               });
               return updatedRecords;
             });
+            
+            // Also update filtered records to reflect the changes
+            fetchDataByDate(dateFilter);
           }
         }
       } catch (err) {
@@ -114,7 +150,7 @@ export function useDashboard() {
     return () => {
       ws.removeEventListener('message', handleMessage);
     };
-  }, [ws]);
+  }, [ws, dateFilter, fetchDataByDate]);
 
   // Request data via WebSocket when connected
   useEffect(() => {
@@ -179,7 +215,7 @@ export function useDashboard() {
     const recordToDelete = attendanceDeleteDialog.item;
     
     // Optimistic UI update - remove the record from state immediately
-    setRecords(prevRecords => prevRecords.filter(r => r.id !== recordToDelete.id));
+    setFilteredRecords(prevRecords => prevRecords.filter(r => r.id !== recordToDelete.id));
     
     try {
       // Make the API call
@@ -189,23 +225,27 @@ export function useDashboard() {
       // Close the dialog
       setAttendanceDeleteDialog({ open: false, item: null, loading: false });
       
-      // No need to refresh data since we've already updated the UI
+      // Also update the main records list
+      setRecords(prevRecords => prevRecords.filter(r => r.id !== recordToDelete.id));
     } catch (err) {
       console.error('Error deleting attendance record:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete attendance record. UI has been refreshed.');
       
       // If the API call fails, fetch all data again to ensure UI is in sync with backend
       fetchData();
+      fetchDataByDate(dateFilter);
     }
   };
 
   return {
-    records,
+    records: filteredRecords,
+    allRecords: records,
     users,
     recordsLoading,
     usersLoading,
     error,
     tabValue,
+    dateFilter,
     userDeleteDialog,
     attendanceDeleteDialog,
     paginationModel,
@@ -217,5 +257,6 @@ export function useDashboard() {
     setPaginationModel,
     setUserDeleteDialog,
     setAttendanceDeleteDialog,
+    setDateFilter,
   };
 } 

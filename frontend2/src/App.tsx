@@ -1,6 +1,8 @@
 import { Routes, Route } from 'react-router-dom';
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import { createTheme, responsiveFontSizes } from '@mui/material/styles';
+import { LocalizationProvider } from '@mui/x-date-pickers';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import Layout from './components/Layout';
 import Register from './pages/Register';
 import Attendance from './pages/Attendance';
@@ -47,7 +49,7 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
       wsRef.current = null;
     }
 
-    const ws = new WebSocket('/ws/attendance');
+    const ws = new WebSocket('ws://localhost:8000/ws/attendance');
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -278,21 +280,22 @@ function App() {
       <CssBaseline />
       <NotificationProvider>
         <WebSocketProvider>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/attendance" element={<Attendance />} />
-              <Route path="/employees" element={<Users />} />
-              <Route path="/debug" element={<Debug />} />
-              <Route path="/office-timings" element={<OfficeTimings />} />
-              <Route path="/early-exit-reasons" element={<EarlyExitReasons />} />
-              <Route path="/shift" element={<Shift />} />
-              <Route path="/shifts" element={<Shifts />} />
-              <Route path="/employee-shifts" element={<EmployeeShifts />} />
-              <Route path="/attendance-by-date" element={<AttendanceByDate />} />
-            </Routes>
-          </Layout>
+          <LocalizationProvider dateAdapter={AdapterDateFns}>
+            <Layout>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/register" element={<Register />} />
+                <Route path="/attendance" element={<Attendance />} />
+                <Route path="/employees" element={<Users />} />
+                <Route path="/debug" element={<Debug />} />
+                <Route path="/office-timings" element={<OfficeTimings />} />
+                <Route path="/early-exit-reasons" element={<EarlyExitReasons />} />
+                <Route path="/shift/:id?" element={<Shift />} />
+                <Route path="/shifts" element={<Shifts />} />
+                <Route path="/employee-shifts" element={<EmployeeShifts />} />
+              </Routes>
+            </Layout>
+          </LocalizationProvider>
         </WebSocketProvider>
       </NotificationProvider>
     </ThemeProvider>

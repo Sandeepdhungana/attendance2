@@ -1,7 +1,9 @@
 {
   "dependencies": {
+    "@mui/x-date-pickers": "^8.0.0",
     "@radix-ui/react-select": "^2.1.7",
     "@radix-ui/react-slot": "^1.2.0",
-    "class-variance-authority": "^0.7.1"
+    "class-variance-authority": "^0.7.1",
+    "date-fns": "^4.1.0"
   }
 }

@@ -207,7 +207,10 @@ export default function Attendance() {
         
         {earlyExitReasons.length > 0 && (
           <Grid item xs={12}>
-            <EarlyExitList earlyExitReasons={earlyExitReasons} />
+            <EarlyExitList 
+              earlyExitReasons={earlyExitReasons} 
+              onDelete={(reason) => setEarlyExitDialog({ open: true, reason })}
+            />
           </Grid>
         )}
       </Grid>

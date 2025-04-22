@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Card,
@@ -14,18 +14,22 @@ import {
   alpha,
   Paper,
   Divider,
+  Stack,
+  CircularProgress,
 } from '@mui/material';
 import { GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
-import { format } from 'date-fns';
-import { Delete as DeleteIcon, CalendarToday, Group } from '@mui/icons-material';
+import { format, addDays } from 'date-fns';
+import { Delete as DeleteIcon, CalendarToday, Group, ArrowBack, ArrowForward, Today } from '@mui/icons-material';
 import { useDashboard } from '../hooks/useDashboard';
 import { TabPanel } from '../components/dashboard/TabPanel';
 import { DeleteDialog } from '../components/dashboard/DeleteDialog';
 import { DataTable } from '../components/dashboard/DataTable';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { AttendanceRecord, User } from '../types/dashboard';
 
 export default function Dashboard() {
   const theme = useTheme();
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const {
     records,
     users,
@@ -44,7 +48,40 @@ export default function Dashboard() {
     setPaginationModel,
     setUserDeleteDialog,
     setAttendanceDeleteDialog,
+    setDateFilter,
   } = useDashboard();
+
+  // Format date for display
+  const formattedDate = format(selectedDate, 'MMMM d, yyyy');
+  
+  // Navigate to previous day
+  const goToPreviousDay = () => {
+    const newDate = addDays(selectedDate, -1);
+    setSelectedDate(newDate);
+    setDateFilter(format(newDate, 'yyyy-MM-dd'));
+  };
+
+  // Navigate to next day
+  const goToNextDay = () => {
+    const newDate = addDays(selectedDate, 1);
+    setSelectedDate(newDate);
+    setDateFilter(format(newDate, 'yyyy-MM-dd'));
+  };
+
+  // Go to today
+  const goToToday = () => {
+    const today = new Date();
+    setSelectedDate(today);
+    setDateFilter(format(today, 'yyyy-MM-dd'));
+  };
+  
+  // Handle date change from date picker
+  const handleDateChange = (newDate: Date | null) => {
+    if (newDate) {
+      setSelectedDate(newDate);
+      setDateFilter(format(newDate, 'yyyy-MM-dd'));
+    }
+  };
 
   const attendanceColumns: GridColDef[] = [
     { field: 'employee_id', headerName: 'Employee ID', width: 150 },
@@ -301,15 +338,91 @@ export default function Dashboard() {
           </Box>
 
           <TabPanel value={tabValue} index={0}>
-            <Box sx={{ p: 0 }}>
-              <DataTable<AttendanceRecord>
-                rows={records}
-                columns={attendanceColumns}
-                loading={recordsLoading}
-                paginationModel={paginationModel}
-                onPaginationModelChange={setPaginationModel}
-              />
+            <Box sx={{ p: 2, borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
+              <Stack direction="row" alignItems="center" justifyContent="space-between">
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <IconButton onClick={goToPreviousDay} size="small">
+                    <ArrowBack fontSize="small" />
+                  </IconButton>
+                  
+                  <DatePicker
+                    label="Date"
+                    value={selectedDate}
+                    onChange={handleDateChange}
+                    slotProps={{ 
+                      textField: { 
+                        size: "small",
+                        sx: { width: 150 }
+                      }
+                    }}
+                  />
+                  
+                  <IconButton onClick={goToNextDay} size="small">
+                    <ArrowForward fontSize="small" />
+                  </IconButton>
+                  
+                  <IconButton 
+                    onClick={goToToday}
+                    color="primary"
+                    size="small"
+                  >
+                    <Today fontSize="small" />
+                  </IconButton>
+                </Stack>
+                
+                <Typography variant="subtitle1" fontWeight="600" color="text.secondary">
+                  {formattedDate}
+                </Typography>
+              </Stack>
             </Box>
+            
+            {/* Display a message when no records are found for the selected date */}
+            {!recordsLoading && records.length === 0 && (
+              <Box sx={{ 
+                p: 4, 
+                textAlign: 'center',
+                backgroundColor: alpha(theme.palette.background.default, 0.6)
+              }}>
+                <CalendarToday 
+                  sx={{ 
+                    fontSize: 60, 
+                    color: alpha(theme.palette.text.secondary, 0.5), 
+                    mb: 2 
+                  }} 
+                />
+                <Typography variant="h6" color="text.secondary">
+                  No attendance records found for {formattedDate}
+                </Typography>
+                <Typography color="text.secondary" sx={{ mt: 1 }}>
+                  Try selecting a different date or check back later
+                </Typography>
+              </Box>
+            )}
+            
+            {/* Show the data table only when records exist */}
+            {records.length > 0 && (
+              <Box sx={{ p: 0 }}>
+                <DataTable<AttendanceRecord>
+                  rows={records}
+                  columns={attendanceColumns}
+                  loading={recordsLoading}
+                  paginationModel={paginationModel}
+                  onPaginationModelChange={setPaginationModel}
+                />
+              </Box>
+            )}
+            
+            {/* Show loading indicator when fetching records */}
+            {recordsLoading && (
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'center', 
+                alignItems: 'center', 
+                height: 300 
+              }}>
+                <CircularProgress />
+              </Box>
+            )}
           </TabPanel>
 
           <TabPanel value={tabValue} index={1}>
