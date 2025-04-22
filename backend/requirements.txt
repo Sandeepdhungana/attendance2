@@ -9,3 +9,4 @@ opencv-python==4.5.3.56
 numpy==1.24.3
 insightface==0.7.3
 onnxruntime==1.8.1
+psutil==5.9.5

@@ -7,10 +7,21 @@ from .database import query, create, create_class_schema
 from .utils.time_utils import get_local_time
 import asyncio
 import logging
+import resource
+import psutil
+import time
+import gc
+import os
 from app.models import Employee, Attendance, OfficeTiming, Shift, TimezoneConfig
 from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
+
+# Memory management settings
+MEMORY_LIMIT_GB = 2  # Limit to 2GB of memory
+MEMORY_CHECK_INTERVAL = 60  # Check memory every 60 seconds
+HIGH_MEMORY_THRESHOLD = 85  # Warn at 85% usage
+CRITICAL_MEMORY_THRESHOLD = 95  # Emergency actions at 95%
 
 app = create_app()
 
@@ -139,19 +150,74 @@ def initialize_back4app():
     logger.info("Database initialization completed!")
 
 
+async def monitor_memory():
+    """Task to periodically monitor memory usage and take action if needed"""
+    while True:
+        try:
+            memory = psutil.virtual_memory()
+            percent_used = memory.percent
+            available_mb = memory.available / (1024 * 1024)
+            
+            # Log memory info
+            logger.info(f"Memory usage: {percent_used:.1f}% used, {available_mb:.1f}MB available")
+            
+            # Take action based on memory usage
+            if percent_used > CRITICAL_MEMORY_THRESHOLD:
+                logger.critical(f"CRITICAL MEMORY USAGE: {percent_used:.1f}%! Taking emergency action.")
+                # Force garbage collection
+                gc.collect()
+                gc.collect()
+                # Sleep a bit to let memory clear
+                await asyncio.sleep(1)
+                # Check if still critical
+                if psutil.virtual_memory().percent > CRITICAL_MEMORY_THRESHOLD:
+                    logger.critical("Memory usage still critical after GC. Restricting new connections.")
+                    # You might want to implement a flag to temporarily pause new connections
+            elif percent_used > HIGH_MEMORY_THRESHOLD:
+                logger.warning(f"HIGH MEMORY USAGE: {percent_used:.1f}%. Running garbage collection.")
+                gc.collect()
+                
+        except Exception as e:
+            logger.error(f"Error in memory monitoring: {str(e)}")
+            
+        # Wait for next check
+        await asyncio.sleep(MEMORY_CHECK_INTERVAL)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application on startup"""
-    # this is always commented out
-    # initialize_back4app()
+    # Configure memory limits - set soft limit to MEMORY_LIMIT_GB GB, hard limit to max value (-1)
+    try:
+        memory_limit_bytes = MEMORY_LIMIT_GB * 1024 * 1024 * 1024  # Convert GB to bytes
+        resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, -1))
+        logger.info(f"Set memory limit to {MEMORY_LIMIT_GB}GB")
+    except Exception as e:
+        logger.warning(f"Failed to set memory limit: {str(e)}")
+    
+    # Log initial memory usage
+    try:
+        process = psutil.Process(os.getpid())
+        process_memory = process.memory_info().rss / (1024 * 1024)  # Convert to MB
+        system_memory = psutil.virtual_memory()
+        logger.info(f"Initial memory usage - Process: {process_memory:.1f}MB, System: {system_memory.percent:.1f}% used")
+    except Exception as e:
+        logger.warning(f"Failed to get memory info: {str(e)}")
+    
     # Start the WebSocket response processing tasks
     asyncio.create_task(process_queue())
     asyncio.create_task(process_websocket_responses())
+    
+    # Start memory monitoring task
+    asyncio.create_task(monitor_memory())
+    
     logger.info("Application startup completed")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources on shutdown"""
+    # Perform manual garbage collection before shutdown
+    gc.collect()
     process_pool.shutdown()
     logger.info("Application shutdown completed")
