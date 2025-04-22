@@ -43,6 +43,7 @@ import {
   WifiOff as WifiOffIcon,
   Wifi as WifiIcon,
   ChevronLeft as ChevronLeftIcon,
+  CalendarMonth as CalendarMonthIcon,
 } from '@mui/icons-material';
 import { useWebSocket } from '../App';
 
@@ -61,6 +62,7 @@ const menuItems = [
 ];
 
 const adminItems = [
+  { text: 'Attendance by Date', icon: <CalendarMonthIcon />, path: '/attendance-by-date' },
   { text: 'Office Timings', icon: <AccessTimeIcon />, path: '/office-timings' },
   { text: 'Early Exit Reasons', icon: <ExitToAppIcon />, path: '/early-exit-reasons' },
   { text: 'Shifts', icon: <ScheduleIcon />, path: '/shifts' },

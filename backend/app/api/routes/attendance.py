@@ -12,6 +12,7 @@ import numpy as np
 import cv2
 from app.models import Employee, Shift
 from pydantic import BaseModel
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -475,3 +476,70 @@ def get_employee_shift(employee_id: str):
     except Exception as e:
         logger.error(f"Error getting employee shift: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/attendance/by-date/{date}")
+def get_attendance_by_date(date: str):
+    """Get attendance records for a specific date (YYYY-MM-DD format)"""
+    try:
+        # Parse the date string
+        try:
+            parsed_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid date format. Please use YYYY-MM-DD format."
+            )
+        
+        # Get start and end of the day in local timezone
+        day_start = datetime.combine(parsed_date, datetime.min.time())
+        day_end = datetime.combine(parsed_date, datetime.max.time())
+        
+        # Convert to ISO format for database query
+        day_start_iso = day_start.isoformat()
+        day_end_iso = day_end.isoformat()
+        
+        logger.info(f"Fetching attendance records for date: {date}")
+        
+        # Query attendance records for the specified date
+        attendance_records = query("Attendance", where={
+            "timestamp": {
+                "$gte": {"__type": "Date", "iso": day_start_iso},
+                "$lte": {"__type": "Date", "iso": day_end_iso}
+            }
+        }, order="-timestamp")
+        
+        if not attendance_records:
+            logger.info(f"No attendance records found for date: {date}")
+            return []
+        
+        # Process and return the records
+        result = []
+        for att in attendance_records:
+            # Get employee details
+            employee = query("Employee", where={"employee_id": att["employee_id"]}, limit=1)
+            employee_name = employee[0].get("name", "Unknown") if employee else "Unknown"
+            
+            result.append({
+                "name": employee_name,
+                "objectId": att["objectId"],
+                "id": att["employee_id"],
+                "employee_id": att["employee_id"],
+                "timestamp": att["timestamp"],
+                "entry_time": att.get("timestamp", {}).get("iso") if isinstance(att.get("timestamp"), dict) else att.get("timestamp"),
+                "exit_time": att.get("exit_time", {}).get("iso") if isinstance(att.get("exit_time"), dict) else att.get("exit_time"),
+                "confidence": att.get("confidence", 0),
+                "is_late": att.get("is_late", False),
+                "is_early_exit": att.get("is_early_exit", False),
+                "early_exit_reason": att.get("early_exit_reason"),
+                "late_message": att.get("late_message"),
+                "created_at": att.get("createdAt"),
+                "updated_at": att.get("updatedAt")
+            })
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching attendance by date: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch attendance records: {str(e)}")
