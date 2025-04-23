@@ -21,8 +21,11 @@ export function DataTable<T>({
 
   return (
     <Box sx={{ 
-      height: 500, 
+      height: '100%', 
       width: '100%',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
       '& .MuiDataGrid-root': {
         border: 'none',
         '& .MuiDataGrid-cell:focus-within': {
@@ -59,7 +62,7 @@ export function DataTable<T>({
         pageSizeOptions={[5, 10, 25, 50]}
         paginationModel={paginationModel}
         onPaginationModelChange={onPaginationModelChange}
-        autoHeight
+        autoHeight={false}
         getRowId={(row: any) => row.id || row.objectId || row.employee_id}
         slots={{
           loadingOverlay: () => (
@@ -78,6 +81,9 @@ export function DataTable<T>({
           ),
         }}
         sx={{
+          height: '100%',
+          width: '100%',
+          flex: 1,
           '& .MuiDataGrid-virtualScroller': {
             overflow: 'auto',
             '&::-webkit-scrollbar': {

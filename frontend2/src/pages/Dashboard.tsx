@@ -305,9 +305,12 @@ export default function Dashboard() {
       <Card sx={{ 
         borderRadius: 3,
         overflow: 'hidden',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.05)'
+        boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+        height: '75vh',
+        display: 'flex',
+        flexDirection: 'column'
       }}>
-        <CardContent sx={{ p: 0 }}>
+        <CardContent sx={{ p: 0, flexGrow: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <Box sx={{ 
             borderBottom: 1, 
             borderColor: 'divider', 
@@ -336,106 +339,118 @@ export default function Dashboard() {
               <Tab label="Employees" />
             </Tabs>
           </Box>
-
-          <TabPanel value={tabValue} index={0}>
-            <Box sx={{ p: 2, borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between">
-                <Stack direction="row" alignItems="center" spacing={1}>
-                  <IconButton onClick={goToPreviousDay} size="small">
-                    <ArrowBack fontSize="small" />
-                  </IconButton>
+          
+          <Box sx={{ flexGrow: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <TabPanel value={tabValue} index={0}>
+              <Box sx={{ p: 2, borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <IconButton onClick={goToPreviousDay} size="small">
+                      <ArrowBack fontSize="small" />
+                    </IconButton>
+                    
+                    <DatePicker
+                      label="Date"
+                      value={selectedDate}
+                      onChange={handleDateChange}
+                      slotProps={{ 
+                        textField: { 
+                          size: "small",
+                          sx: { width: 150 }
+                        }
+                      }}
+                    />
+                    
+                    <IconButton onClick={goToNextDay} size="small">
+                      <ArrowForward fontSize="small" />
+                    </IconButton>
+                    
+                    <IconButton 
+                      onClick={goToToday}
+                      color="primary"
+                      size="small"
+                    >
+                      <Today fontSize="small" />
+                    </IconButton>
+                  </Stack>
                   
-                  <DatePicker
-                    label="Date"
-                    value={selectedDate}
-                    onChange={handleDateChange}
-                    slotProps={{ 
-                      textField: { 
-                        size: "small",
-                        sx: { width: 150 }
-                      }
-                    }}
-                  />
-                  
-                  <IconButton onClick={goToNextDay} size="small">
-                    <ArrowForward fontSize="small" />
-                  </IconButton>
-                  
-                  <IconButton 
-                    onClick={goToToday}
-                    color="primary"
-                    size="small"
-                  >
-                    <Today fontSize="small" />
-                  </IconButton>
+                  <Typography variant="subtitle1" fontWeight="600" color="text.secondary">
+                    {formattedDate}
+                  </Typography>
                 </Stack>
-                
-                <Typography variant="subtitle1" fontWeight="600" color="text.secondary">
-                  {formattedDate}
-                </Typography>
-              </Stack>
-            </Box>
-            
-            {/* Display a message when no records are found for the selected date */}
-            {!recordsLoading && records.length === 0 && (
-              <Box sx={{ 
-                p: 4, 
-                textAlign: 'center',
-                backgroundColor: alpha(theme.palette.background.default, 0.6)
-              }}>
-                <CalendarToday 
-                  sx={{ 
-                    fontSize: 60, 
-                    color: alpha(theme.palette.text.secondary, 0.5), 
-                    mb: 2 
-                  }} 
-                />
-                <Typography variant="h6" color="text.secondary">
-                  No attendance records found for {formattedDate}
-                </Typography>
-                <Typography color="text.secondary" sx={{ mt: 1 }}>
-                  Try selecting a different date or check back later
-                </Typography>
               </Box>
-            )}
-            
-            {/* Show the data table only when records exist */}
-            {records.length > 0 && (
-              <Box sx={{ p: 0 }}>
-                <DataTable<AttendanceRecord>
-                  rows={records}
-                  columns={attendanceColumns}
-                  loading={recordsLoading}
+              
+              {/* Display a message when no records are found for the selected date */}
+              {!recordsLoading && records.length === 0 && (
+                <Box sx={{ 
+                  p: 4, 
+                  textAlign: 'center',
+                  backgroundColor: alpha(theme.palette.background.default, 0.6)
+                }}>
+                  <CalendarToday 
+                    sx={{ 
+                      fontSize: 60, 
+                      color: alpha(theme.palette.text.secondary, 0.5), 
+                      mb: 2 
+                    }} 
+                  />
+                  <Typography variant="h6" color="text.secondary">
+                    No attendance records found for {formattedDate}
+                  </Typography>
+                  <Typography color="text.secondary" sx={{ mt: 1 }}>
+                    Try selecting a different date or check back later
+                  </Typography>
+                </Box>
+              )}
+              
+              {/* Show the data table only when records exist */}
+              {records.length > 0 && (
+                <Box sx={{ 
+                  flex: 1,
+                  overflow: 'hidden',
+                  height: 'calc(100% - 60px)',
+                  display: 'flex'
+                }}>
+                  <DataTable<AttendanceRecord>
+                    rows={records}
+                    columns={attendanceColumns}
+                    loading={recordsLoading}
+                    paginationModel={paginationModel}
+                    onPaginationModelChange={setPaginationModel}
+                  />
+                </Box>
+              )}
+              
+              {/* Show loading indicator when fetching records */}
+              {recordsLoading && (
+                <Box sx={{ 
+                  display: 'flex', 
+                  justifyContent: 'center', 
+                  alignItems: 'center', 
+                  height: 300 
+                }}>
+                  <CircularProgress />
+                </Box>
+              )}
+            </TabPanel>
+
+            <TabPanel value={tabValue} index={1}>
+              <Box sx={{ 
+                flex: 1,
+                overflow: 'hidden',
+                height: '100%',
+                display: 'flex'
+              }}>
+                <DataTable<User>
+                  rows={users}
+                  columns={employeeColumns}
+                  loading={usersLoading}
                   paginationModel={paginationModel}
                   onPaginationModelChange={setPaginationModel}
                 />
               </Box>
-            )}
-            
-            {/* Show loading indicator when fetching records */}
-            {recordsLoading && (
-              <Box sx={{ 
-                display: 'flex', 
-                justifyContent: 'center', 
-                alignItems: 'center', 
-                height: 300 
-              }}>
-                <CircularProgress />
-              </Box>
-            )}
-          </TabPanel>
-
-          <TabPanel value={tabValue} index={1}>
-            <Box sx={{ p: 0 }}>
-              <DataTable<User>
-                rows={users}
-                columns={employeeColumns}
-                loading={usersLoading}
-                paginationModel={paginationModel}
-                onPaginationModelChange={setPaginationModel}
-              />
-            </Box>
-          </TabPanel>
+            </TabPanel>
+          </Box>
         </CardContent>
       </Card>
 
