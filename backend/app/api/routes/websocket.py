@@ -80,8 +80,12 @@ class EmployeeCache:
         missing_ids = [id for id in employee_ids if id not in cls._cache]
         
         if missing_ids:
-            # Batch query missing employees
-            employees = query("Employee", where={"employee_id": {"$inQuery": {"where": {"employee_id": missing_ids}}}})
+            # Batch query missing employees using $in operator
+            employees = query("Employee", where={
+                "employee_id": {
+                    "$in": missing_ids
+                }
+            })
             
             # Update cache
             for emp in employees:
