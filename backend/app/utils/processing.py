@@ -357,103 +357,99 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
             face_embeddings = face_recognition.get_embeddings(img)
             if not face_embeddings:
                 logger.info(f"No faces detected in image from client {client_id}")
-                return [], [], {}, 1
+                return [], [], {}, 1  # Return early if no faces found
         except MemoryError as me:
             logger.error(f"Memory error during face detection for client {client_id}: {str(me)}")
-            # Return a specific error code for memory issues
             return [], [], {}, 2
         except Exception as e:
             logger.error(f"Error during face detection for client {client_id}: {str(e)}")
             return [], [], {}, 0
 
-        # Get all employees from the database
+        # Only proceed with employee queries if faces were detected
         try:
+            # Get all employees from the cache
             employees = EmployeeDataCache.get_all_employees()
             if not employees:
                 logger.warning("No employees found in database")
                 return [], [], {}, 0
-        except Exception as e:
-            logger.error(f"Error querying employees for client {client_id}: {str(e)}")
-            return [], [], {}, 0
 
-        # Find matches for all detected faces
-        try:
+            # Find matches for all detected faces
             matches = face_recognition.find_matches_for_embeddings(face_embeddings, employees)
             if not matches:
                 logger.info(f"No matching employees found for client {client_id}")
                 return [], [], {}, 0
+
+            # Process each matched employee
+            processed_employees = []
+            attendance_updates = []
+            last_recognized_employees = {}
+
+            current_time = get_local_time()
+            
+            for match in matches:
+                employee = match['employee']
+                similarity = match['similarity']
+                
+                # Ensure employee information is complete
+                if not employee.get('name'):
+                    logger.warning(f"Employee with ID {employee.get('employee_id')} has missing name. Full employee data: {employee}")
+                
+                # Format similarity as percentage for display
+                similarity_percent = round(similarity * 100, 1) if isinstance(similarity, float) else similarity
+                
+                logger.info(f"Detected employee {employee.get('name', 'Unknown')} (ID: {employee.get('employee_id', 'Unknown')}) with confidence {similarity_percent}%")
+                
+                # Update last recognized employees
+                last_recognized_employees[employee.get("employee_id")] = {
+                    'employee': employee,
+                    'similarity': similarity,
+                    'similarity_percent': similarity_percent,
+                    'timestamp': current_time.isoformat()
+                }
+
+                # Process attendance using shared function
+                try:
+                    result = process_attendance_for_employee(employee, similarity, entry_type)
+                    
+                    if result["processed_employee"]:
+                        # Add additional data helpful for real-time display
+                        processed_employee = result["processed_employee"]
+                        
+                        # Ensure employee name is present in processed_employee
+                        if not processed_employee.get('name') and employee.get('name'):
+                            processed_employee["name"] = employee.get('name')
+                            
+                        processed_employee["similarity_percent"] = similarity_percent
+                        processed_employee["detection_time"] = current_time.isoformat()
+                        processed_employee["is_streaming"] = True
+                        
+                        # Log processed employee for debugging
+                        logger.debug(f"Processed employee for client {client_id}: {processed_employee}")
+                        
+                        processed_employees.append(processed_employee)
+                    
+                    if result["attendance_update"]:
+                        # Add additional confidence information
+                        result["attendance_update"]["confidence_percent"] = similarity_percent
+                        result["attendance_update"]["detection_time"] = current_time.isoformat()
+                        
+                        # Ensure employee name is present in attendance update too
+                        if not result["attendance_update"].get('name') and employee.get('name'):
+                            result["attendance_update"]["name"] = employee.get('name')
+                            
+                        attendance_updates.append(result["attendance_update"])
+                except Exception as e:
+                    logger.error(f"Error processing attendance for employee {employee.get('employee_id')}: {str(e)}")
+                    continue
+
+            return processed_employees, attendance_updates, last_recognized_employees, 0
+
         except Exception as e:
-            logger.error(f"Error finding matches for client {client_id}: {str(e)}")
+            logger.error(f"Error processing employees for client {client_id}: {str(e)}")
             return [], [], {}, 0
-
-        # Process each matched employee
-        processed_employees = []
-        attendance_updates = []
-        last_recognized_employees = {}
-
-        current_time = get_local_time()
-        
-        for match in matches:
-            employee = match['employee']
-            similarity = match['similarity']
-            
-            # Ensure employee information is complete
-            if not employee.get('name'):
-                logger.warning(f"Employee with ID {employee.get('employee_id')} has missing name. Full employee data: {employee}")
-            
-            # Format similarity as percentage for display
-            similarity_percent = round(similarity * 100, 1) if isinstance(similarity, float) else similarity
-            
-            logger.info(f"Detected employee {employee.get('name', 'Unknown')} (ID: {employee.get('employee_id', 'Unknown')}) with confidence {similarity_percent}%")
-            
-            # Update last recognized employees
-            last_recognized_employees[employee.get("employee_id")] = {
-                'employee': employee,
-                'similarity': similarity,
-                'similarity_percent': similarity_percent,
-                'timestamp': current_time.isoformat()
-            }
-
-            # Process attendance using shared function
-            try:
-                result = process_attendance_for_employee(employee, similarity, entry_type)
-                
-                if result["processed_employee"]:
-                    # Add additional data helpful for real-time display
-                    processed_employee = result["processed_employee"]
-                    
-                    # Ensure employee name is present in processed_employee
-                    if not processed_employee.get('name') and employee.get('name'):
-                        processed_employee["name"] = employee.get('name')
-                        
-                    processed_employee["similarity_percent"] = similarity_percent
-                    processed_employee["detection_time"] = current_time.isoformat()
-                    processed_employee["is_streaming"] = True
-                    
-                    # Log processed employee for debugging
-                    logger.debug(f"Processed employee for client {client_id}: {processed_employee}")
-                    
-                    processed_employees.append(processed_employee)
-                
-                if result["attendance_update"]:
-                    # Add additional confidence information
-                    result["attendance_update"]["confidence_percent"] = similarity_percent
-                    result["attendance_update"]["detection_time"] = current_time.isoformat()
-                    
-                    # Ensure employee name is present in attendance update too
-                    if not result["attendance_update"].get('name') and employee.get('name'):
-                        result["attendance_update"]["name"] = employee.get('name')
-                        
-                    attendance_updates.append(result["attendance_update"])
-            except Exception as e:
-                logger.error(f"Error processing attendance for employee {employee.get('employee_id')}: {str(e)}")
-                continue
-
-        return processed_employees, attendance_updates, last_recognized_employees, 0
 
     except MemoryError as me:
         logger.error(f"Memory error processing image for client {client_id}: {str(me)}")
-        # Return a specific error code for memory issues
         return [], [], {}, 2
     except Exception as e:
         logger.error(f"Error processing image for client {client_id}: {str(e)}")
