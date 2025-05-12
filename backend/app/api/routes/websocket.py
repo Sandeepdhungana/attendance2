@@ -41,6 +41,55 @@ def create_new_process_pool():
         logger.error(f"Error creating new process pool: {str(e)}")
         return None
 
+# Add at the top of the file after imports
+class EmployeeCache:
+    _cache = {}
+    _last_clear = None
+    _cache_ttl = 3600  # 1 hour in seconds
+    
+    @classmethod
+    def get_employee(cls, employee_id: str):
+        current_time = get_local_time()
+        
+        # Clear cache if needed
+        if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
+            cls._cache.clear()
+            cls._last_clear = current_time
+            
+        # Return from cache if available
+        if employee_id in cls._cache:
+            return cls._cache[employee_id]
+            
+        # Query and cache
+        employees = query("Employee", where={"employee_id": employee_id}, limit=1)
+        if employees:
+            cls._cache[employee_id] = employees[0]
+            return employees[0]
+        return None
+    
+    @classmethod
+    def get_employees_batch(cls, employee_ids: list):
+        current_time = get_local_time()
+        
+        # Clear cache if needed
+        if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
+            cls._cache.clear()
+            cls._last_clear = current_time
+            
+        # Find which IDs we need to query
+        missing_ids = [id for id in employee_ids if id not in cls._cache]
+        
+        if missing_ids:
+            # Batch query missing employees
+            employees = query("Employee", where={"employee_id": {"$inQuery": {"where": {"employee_id": missing_ids}}}})
+            
+            # Update cache
+            for emp in employees:
+                cls._cache[emp["employee_id"]] = emp
+                
+        # Return all requested employees from cache
+        return [cls._cache.get(id) for id in employee_ids if cls._cache.get(id)]
+
 
 @router.websocket("/ws/attendance")
 async def websocket_endpoint(websocket: WebSocket):
@@ -214,12 +263,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Define delete employee operation for thread pool
                     def delete_employee_record():
                         # Get employee info before deletion
-                        employee = query("Employee", where={
-                                         "employee_id": employee_id}, limit=1)
+                        employee = EmployeeCache.get_employee(employee_id)
                         if employee:
-                            employee = employee[0]
                             # Delete the employee
                             delete("Employee", employee["objectId"])
+                            # Remove from cache
+                            EmployeeCache._cache.pop(employee_id, None)
                             return employee
                         return None
 
@@ -272,7 +321,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # Check if employee already exists in thread pool
                 def check_employee():
-                    return query("Employee", where={"employee_id": employee_id}, limit=1)
+                    return EmployeeCache.get_employee(employee_id)
 
                 existing_employee = check_employee()
 

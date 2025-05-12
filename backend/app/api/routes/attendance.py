@@ -13,6 +13,7 @@ import cv2
 from app.models import Employee, Shift
 from pydantic import BaseModel
 from datetime import datetime
+from app.api.routes.websocket import EmployeeCache
 
 logger = logging.getLogger(__name__)
 
@@ -368,17 +369,15 @@ async def register_employee(
                 status_code=400, detail="No face detected in image")
 
         # Check if employee already exists
-        employee_model = Employee()
-        existing_employee = employee_model.query(
-            where={"employee_id": employee_id})
-        if existing_employee:
+        employee = EmployeeCache.get_employee(employee_id)
+        if employee:
             raise HTTPException(
                 status_code=400,
                 detail="Employee ID already registered"
             )
 
         # Check if this face is already registered by comparing with existing employees
-        all_employees = employee_model.query()
+        all_employees = EmployeeCache.get_all_employees()
 
         # Find matches with similarity > 0.6
         face_similarity_threshold = 0.6
@@ -424,7 +423,7 @@ async def register_employee(
         if email:
             employee_data["email"] = email
 
-        new_employee = employee_model.create(employee_data)
+        new_employee = Employee().create(employee_data)
 
         # Broadcast user registration
         attendance_update = {

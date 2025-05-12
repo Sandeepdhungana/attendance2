@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 # Configuration for auto-exit detection (in seconds)
 AUTO_EXIT_THRESHOLD = 600  # Time in seconds to consider a re-detection as an exit
 
+class EmployeeDataCache:
+    _cache = None
+    _last_clear = None
+    _cache_ttl = 300  # 5 minutes in seconds - shorter TTL for face recognition data
+    
+    @classmethod
+    def get_all_employees(cls):
+        from app.utils.time_utils import get_local_time
+        current_time = get_local_time()
+        
+        # Clear cache if needed
+        if cls._cache is None or cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
+            from app.database import query
+            cls._cache = query("Employee")
+            cls._last_clear = current_time
+            
+        return cls._cache
+
 def process_attendance_for_employee(employee: Dict[str, Any], similarity: float, entry_type: str):
     """Process attendance for an employee with consistent duplicate checking and auto-exit"""
     # Check if attendance already marked for today
@@ -350,7 +368,7 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
 
         # Get all employees from the database
         try:
-            employees = db_query("Employee")
+            employees = EmployeeDataCache.get_all_employees()
             if not employees:
                 logger.warning("No employees found in database")
                 return [], [], {}, 0
