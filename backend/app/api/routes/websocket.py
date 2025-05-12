@@ -119,8 +119,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Run database query in thread pool to avoid blocking
                 def fetch_attendance():
                     attendance_records = query("Attendance")
+                    
+                    # Collect all unique employee IDs
+                    employee_ids = list(set(att["employee_id"] for att in attendance_records))
+                    
+                    # Batch fetch all employees at once
+                    employees = EmployeeCache.get_employees_batch(employee_ids)
+                    
+                    # Create a lookup dictionary for quick access
+                    employee_lookup = {emp["employee_id"]: emp for emp in employees if emp}
+                    
                     return [{
-                        "name": query("Employee", where={"employee_id": att["employee_id"]}, limit=1)[0].get("name"),
+                        "name": employee_lookup.get(att["employee_id"], {}).get("name", "Unknown"),
                         "objectId": att["objectId"],
                         # Set id to employee_id for consistency with websocket
                         "id": att["employee_id"],
