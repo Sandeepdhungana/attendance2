@@ -24,6 +24,7 @@ from app.utils.websocket import (
 from app.utils.processing import process_image_in_process, process_attendance_for_employee
 from app.utils.time_utils import get_local_time
 from app.config import IMAGES_DIR, MAX_CONCURRENT_TASKS_PER_CLIENT
+from typing import List
 
 
 
@@ -49,27 +50,33 @@ class EmployeeCache:
     
     @classmethod
     def get_employee(cls, employee_id: str):
-        current_time = get_local_time()
+        """Get employee from cache or database"""
+        current_time = datetime.now()
         
         # Clear cache if needed
         if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
             cls._cache.clear()
             cls._last_clear = current_time
             
-        # Return from cache if available
+        # Check cache first
         if employee_id in cls._cache:
             return cls._cache[employee_id]
             
-        # Query and cache
-        employees = query("Employee", where={"employee_id": employee_id}, limit=1)
-        if employees:
-            cls._cache[employee_id] = employees[0]
-            return employees[0]
+        # If not in cache, query database
+        try:
+            employee = query("Employee", where={"employee_id": employee_id}, limit=1)
+            if employee:
+                cls._cache[employee_id] = employee[0]
+                return employee[0]
+        except Exception as e:
+            logger.error(f"Error querying employee {employee_id}: {str(e)}")
+            
         return None
-    
+
     @classmethod
-    def get_employees_batch(cls, employee_ids: list):
-        current_time = get_local_time()
+    def get_employees_batch(cls, employee_ids: List[str]):
+        """Get multiple employees in a single query"""
+        current_time = datetime.now()
         
         # Clear cache if needed
         if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
@@ -77,22 +84,54 @@ class EmployeeCache:
             cls._last_clear = current_time
             
         # Find which IDs we need to query
-        missing_ids = [id for id in employee_ids if id not in cls._cache]
+        missing_ids = [eid for eid in employee_ids if eid not in cls._cache]
         
         if missing_ids:
-            # Batch query missing employees using $in operator
-            employees = query("Employee", where={
-                "employee_id": {
-                    "$in": missing_ids
-                }
-            })
-            
-            # Update cache
-            for emp in employees:
-                cls._cache[emp["employee_id"]] = emp
+            try:
+                # Query all missing employees at once
+                employees = query("Employee", where={"employee_id": {"$in": missing_ids}})
                 
+                # Update cache with new results
+                for employee in employees:
+                    if employee.get("employee_id"):
+                        cls._cache[employee["employee_id"]] = employee
+            except Exception as e:
+                logger.error(f"Error batch querying employees: {str(e)}")
+                return []
+        
         # Return all requested employees from cache
-        return [cls._cache.get(id) for id in employee_ids if cls._cache.get(id)]
+        return [cls._cache.get(eid) for eid in employee_ids if cls._cache.get(eid)]
+
+    @classmethod
+    def get_all_employees(cls):
+        """Get all employees from cache or database"""
+        current_time = datetime.now()
+        
+        # Clear cache if needed
+        if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
+            cls._cache.clear()
+            cls._last_clear = current_time
+            
+        # If cache is empty, query all employees
+        if not cls._cache:
+            try:
+                employees = query("Employee")
+                # Update cache with all employees
+                for employee in employees:
+                    if employee.get("employee_id"):
+                        cls._cache[employee["employee_id"]] = employee
+            except Exception as e:
+                logger.error(f"Error querying all employees: {str(e)}")
+                return []
+        
+        # Return all employees from cache
+        return list(cls._cache.values())
+
+    @classmethod
+    def remove_employee(cls, employee_id: str):
+        """Remove employee from cache"""
+        if employee_id in cls._cache:
+            del cls._cache[employee_id]
 
 
 @router.websocket("/ws/attendance")
