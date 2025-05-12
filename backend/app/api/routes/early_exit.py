@@ -206,58 +206,66 @@ async def submit_early_exit_reason(request: EarlyExitRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/early-exit-reasons")
-def get_early_exit_reasons():
-    """Get all early exit reasons"""
+async def get_early_exit_reasons():
+    """Get all early exit reasons with employee and attendance information"""
     try:
-        # Query all early exit reasons from Back4app, ordered by creation date
+        # Get all early exit reasons ordered by creation date
         reasons = query("EarlyExitReason", order="-created_at")
         
-        # Get all unique employee IDs and attendance IDs
-        employee_ids = {reason.get("employee_id") for reason in reasons if reason.get("employee_id")}
-        attendance_ids = {reason.get("attendance_id") for reason in reasons if reason.get("attendance_id")}
+        if not reasons:
+            return []
+            
+        # Collect unique employee IDs and attendance IDs
+        employee_ids = set()
+        attendance_ids = set()
         
-        # Batch fetch all employees and attendance records
-        employees = query("Employee", where={"employee_id": {"$inQuery": {"where": {"employee_id": list(employee_ids)}}}})
-        attendance_records = query("Attendance", where={"objectId": {"$inQuery": {"where": {"objectId": list(attendance_ids)}}}})
+        for reason in reasons:
+            if reason.get("employee_id"):
+                employee_ids.add(reason["employee_id"])
+            if reason.get("attendance_id"):
+                attendance_ids.add(reason["attendance_id"])
         
-        # Create lookup dictionaries
-        employee_lookup = {emp["employee_id"]: emp for emp in employees}
-        attendance_lookup = {att["objectId"]: att for att in attendance_records}
+        # Batch fetch all employees at once using $in operator
+        employees = []
+        if employee_ids:
+            try:
+                employees = query("Employee", where={"employee_id": {"$in": list(employee_ids)}})
+            except Exception as e:
+                logger.error(f"Error batch querying employees: {str(e)}")
+        
+        # Create lookup dictionaries for quick access
+        employee_lookup = {emp["employee_id"]: emp for emp in employees if emp.get("employee_id")}
+        
+        # Batch fetch all attendance records at once
+        attendance_records = []
+        if attendance_ids:
+            try:
+                attendance_records = query("Attendance", where={"objectId": {"$in": list(attendance_ids)}})
+            except Exception as e:
+                logger.error(f"Error batch querying attendance records: {str(e)}")
+        
+        attendance_lookup = {att["objectId"]: att for att in attendance_records if att.get("objectId")}
         
         # Format the response
         formatted_reasons = []
         for reason in reasons:
-            employee_id = reason.get("employee_id")
-            employee_name = "Unknown"
+            employee = employee_lookup.get(reason.get("employee_id", ""))
+            attendance = attendance_lookup.get(reason.get("attendance_id", ""))
             
-            if employee_id and employee_id in employee_lookup:
-                employee = employee_lookup[employee_id]
-                employee_name = employee.get("name", "Unknown")
-            
-            # Get attendance info to check is_early_exit status
-            attendance_id = reason.get("attendance_id")
-            is_early_exit = False
-            exit_time = None
-            
-            if attendance_id and attendance_id in attendance_lookup:
-                attendance = attendance_lookup[attendance_id]
-                is_early_exit = attendance.get("is_early_exit", False)
-                exit_time_obj = attendance.get("exit_time", {})
-                if isinstance(exit_time_obj, dict) and exit_time_obj.get("iso"):
-                    exit_time = exit_time_obj.get("iso")
-            
-            formatted_reasons.append({
-                "id": reason.get("objectId"),
-                "user_id": reason.get("employee_id"),
-                "user_name": employee_name,
-                "attendance_id": attendance_id,
+            formatted_reason = {
+                "objectId": reason.get("objectId"),
+                "employee_id": reason.get("employee_id"),
+                "employee_name": employee.get("name", "Unknown") if employee else "Unknown",
+                "attendance_id": reason.get("attendance_id"),
+                "exit_time": attendance.get("exit_time", {}).get("iso") if attendance else None,
                 "reason": reason.get("reason"),
-                "timestamp": reason.get("createdAt"),
-                "is_early_exit": is_early_exit,
-                "exit_time": exit_time
-            })
+                "created_at": reason.get("createdAt"),
+                "updated_at": reason.get("updatedAt")
+            }
+            formatted_reasons.append(formatted_reason)
             
         return formatted_reasons
+        
     except Exception as e:
         logger.error(f"Error getting early exit reasons: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
