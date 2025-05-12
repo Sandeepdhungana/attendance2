@@ -8,24 +8,32 @@ from app.database import query as db_query
 
 logger = logging.getLogger(__name__)
 
-def get_attendance_records() -> List[Dict[str, Any]]:
-    """Get all attendance records"""
-    attendance_model = Attendance()
-    attendances = attendance_model.query()
-
-    # Get all unique employee IDs
-    employee_ids = {att["employee_id"] for att in attendances}
+def get_attendance_records():
+    """Get all attendance records with employee names"""
+    # Get all attendance records
+    attendance_records = db_query("Attendance", order="-timestamp")
     
-    # Batch fetch all employees in one query
-    employees = db_query("Employee", where={"employee_id": {"$inQuery": {"where": {"employee_id": list(employee_ids)}}}})
+    if not attendance_records:
+        return []
+        
+    # Get unique employee IDs
+    employee_ids = list(set(att["employee_id"] for att in attendance_records))
     
-    # Create a lookup dictionary for quick employee access
+    # Batch fetch all employees at once using $in operator
+    employees = db_query("Employee", where={
+        "employee_id": {
+            "$in": employee_ids
+        }
+    })
+    
+    # Create a lookup dictionary for quick access
     employee_lookup = {emp["employee_id"]: emp for emp in employees}
     
+    # Format the response
     return [{
         "name": employee_lookup.get(att["employee_id"], {}).get("name", "Unknown"),
         "objectId": att["objectId"],
-        "id": att["employee_id"],  # Set id to employee_id for consistency with websocket
+        "id": att["employee_id"],
         "employee_id": att["employee_id"],
         "timestamp": att["timestamp"],
         "entry_time": att.get("timestamp", {}).get("iso") if isinstance(att.get("timestamp"), dict) else att.get("timestamp"),
@@ -36,7 +44,7 @@ def get_attendance_records() -> List[Dict[str, Any]]:
         "early_exit_reason": att.get("early_exit_reason"),
         "created_at": att["createdAt"],
         "updated_at": att["updatedAt"]
-    } for att in attendances]
+    } for att in attendance_records]
 
 def delete_attendance_record(attendance_id: str) -> Dict[str, str]:
     """Delete an attendance record"""
