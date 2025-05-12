@@ -306,7 +306,7 @@ export default function Dashboard() {
         borderRadius: 3,
         overflow: 'hidden',
         boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
-        height: '75vh',
+        // height: '75vh',
         display: 'flex',
         flexDirection: 'column'
       }}>

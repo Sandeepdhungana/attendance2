@@ -14,7 +14,7 @@ from ..models import Attendance
 logger = logging.getLogger(__name__)
 
 # Configuration for auto-exit detection (in seconds)
-AUTO_EXIT_THRESHOLD = 10  # Time in seconds to consider a re-detection as an exit
+AUTO_EXIT_THRESHOLD = 600  # Time in seconds to consider a re-detection as an exit
 
 def process_attendance_for_employee(employee: Dict[str, Any], similarity: float, entry_type: str):
     """Process attendance for an employee with consistent duplicate checking and auto-exit"""
