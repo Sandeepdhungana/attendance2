@@ -10,6 +10,9 @@ from datetime import datetime, time, timedelta
 from app.utils.time_utils import convert_to_local_time, get_local_date, get_local_time
 from app.database import query as db_query
 
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 # Headers for all requests
 HEADERS = {
     "X-Parse-Application-Id": BACK4APP_APPLICATION_ID,
@@ -201,84 +204,146 @@ class Attendance(BaseModel):
 
         return False, None, None, None
 
-    def check_early_exit(self, employee_id, exit_time=None):
-        """
-        Determine if the attendance exit is early based on employee's shift
-
+    def check_early_exit(self, employee_id: str, exit_time: datetime = None) -> tuple[bool, str]:
+        """Check if an employee's exit is early based on their shift timing
+        
         Args:
-            employee_id (str): ID of the employee
-            exit_time (datetime, optional): Exit time to check. Defaults to current time.
-
+            employee_id: The employee's ID
+            exit_time: Optional exit time to check. If not provided, will check if exit_time exists in attendance record
+            
         Returns:
-            tuple: (is_early_exit, message)
+            tuple[bool, str]: (is_early_exit, message)
         """
-        from app.utils.time_utils import convert_to_local_time, get_local_date
-        from app.database import query as db_query
-
-        if exit_time is None:
-            exit_time = get_local_time()
-
-        today = get_local_date()
-        self._clear_caches_if_needed()
-
-        # Check employee cache first
-        if employee_id not in self._employee_cache:
-            # Query for employee data to get their shift
-            employees = db_query("Employee", where={"employee_id": employee_id}, limit=1)
-            if not employees:
-                return False, None
-            self._employee_cache[employee_id] = employees[0]
-
-        employee = self._employee_cache[employee_id]
-        shift_id = employee.get("shift")
-
-        # If no shift assigned, use default office timings
-        if not shift_id or not isinstance(shift_id, dict) or not shift_id.get("objectId"):
-            # Check office timing cache
-            if self._office_timing_cache is None:
+        try:
+            # Get employee and their shift
+            employee = db_query("Employee", where={"employee_id": employee_id}, limit=1)
+            if not employee:
+                return False, "Employee not found"
+            
+            employee = employee[0]
+            shift_id = employee.get("shift")
+            
+            # Get today's date in local timezone
+            today = get_local_date()
+            
+            # Get attendance record for today
+            today_start = datetime.combine(today, datetime.min.time())
+            today_start = convert_to_local_time(today_start)
+            today_end = datetime.combine(today, datetime.max.time())
+            today_end = convert_to_local_time(today_end)
+            
+            attendance = db_query("Attendance", 
+                where={
+                    "employee_id": employee_id,
+                    "timestamp": {
+                        "$gte": {"__type": "Date", "iso": today_start.isoformat()},
+                        "$lte": {"__type": "Date", "iso": today_end.isoformat()}
+                    }
+                },
+                limit=1
+            )
+            
+            if not attendance:
+                return False, "No attendance record found for today"
+            
+            attendance = attendance[0]
+            
+            # If no exit time is provided and no exit time in record, mark as early exit
+            if not exit_time and not attendance.get("exit_time"):
+                return True, "No exit time given"
+            
+            # Get entry and exit times
+            entry_time = attendance.get("timestamp", {}).get("iso")
+            if not entry_time:
+                return False, "No entry time found"
+            
+            # Convert entry time to datetime
+            entry_datetime = datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+            entry_datetime = convert_to_local_time(entry_datetime)
+            
+            # Get exit time (either provided or from record)
+            if exit_time:
+                exit_datetime = convert_to_local_time(exit_time)
+            else:
+                exit_time = attendance.get("exit_time", {}).get("iso")
+                if not exit_time:
+                    return True, "No exit time given"
+                exit_datetime = datetime.fromisoformat(exit_time.replace('Z', '+00:00'))
+                exit_datetime = convert_to_local_time(exit_datetime)
+            
+            # Calculate actual time spent (x)
+            time_spent = (exit_datetime - entry_datetime).total_seconds()
+            
+            # Get shift timing
+            shift_start = None
+            shift_end = None
+            
+            if shift_id and isinstance(shift_id, dict) and shift_id.get("objectId"):
+                # Get shift details
+                shift = db_query("Shift", where={"objectId": shift_id.get("objectId")}, limit=1)
+                if shift and shift[0].get("login_time") and shift[0].get("logout_time"):
+                    # Parse shift times
+                    login_time_str = shift[0].get("login_time")
+                    logout_time_str = shift[0].get("logout_time")
+                    
+                    # Convert to datetime objects for the attendance date
+                    login_hours, login_minutes = map(int, login_time_str.split(":"))
+                    logout_hours, logout_minutes = map(int, logout_time_str.split(":"))
+                    
+                    # Create datetime objects for the attendance date
+                    shift_start = datetime.combine(entry_datetime.date(), 
+                                                 datetime.min.time().replace(hour=login_hours, 
+                                                                           minute=login_minutes))
+                    shift_end = datetime.combine(entry_datetime.date(), 
+                                               datetime.min.time().replace(hour=logout_hours, 
+                                                                         minute=logout_minutes))
+                    
+                    # Make timezone-aware
+                    shift_start = convert_to_local_time(shift_start)
+                    shift_end = convert_to_local_time(shift_end)
+            else:
+                # Fall back to office timings
                 office_timings = db_query("OfficeTiming", limit=1)
-                if not office_timings:
-                    return False, None
-                self._office_timing_cache = office_timings[0]
-
-            logout_time_str = self._office_timing_cache.get("logout_time")
-        else:
-            # Get shift details from cache or query
-            shift_object_id = shift_id.get("objectId")
-            if shift_object_id not in self._shift_cache:
-                shifts = db_query("Shift", where={"objectId": shift_object_id}, limit=1)
-                if not shifts:
-                    return False, None
-                self._shift_cache[shift_object_id] = shifts[0]
-
-            logout_time_str = self._shift_cache[shift_object_id].get("logout_time")
-
-        if not logout_time_str:
-            return False, None
-
-        # Parse logout time
-        logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
-
-        # Create datetime object for the logout time today
-        logout_time = datetime.combine(today,
-                                       datetime.min.time().replace(hour=logout_time_hours,
-                                                                   minute=logout_time_minutes))
-        logout_time = convert_to_local_time(logout_time)
-
-        # Check if exit is early
-        is_early_exit = exit_time < logout_time
-
-        if is_early_exit:
-            # Calculate how early in minutes
-            early_seconds = (logout_time - exit_time).total_seconds()
-            early_minutes = int(early_seconds / 60)
-
-            # Generate message
-            message = f"Early exit by {early_minutes} minutes. Shift end: {logout_time.strftime('%H:%M')}"
-
-            return is_early_exit, message
-
-        return False, None
+                if office_timings and office_timings[0].get("login_time") and office_timings[0].get("logout_time"):
+                    # Parse office times
+                    login_time_str = office_timings[0].get("login_time")
+                    logout_time_str = office_timings[0].get("logout_time")
+                    
+                    # Convert to datetime objects for the attendance date
+                    login_hours, login_minutes = map(int, login_time_str.split(":"))
+                    logout_hours, logout_minutes = map(int, logout_time_str.split(":"))
+                    
+                    # Create datetime objects for the attendance date
+                    shift_start = datetime.combine(entry_datetime.date(), 
+                                                 datetime.min.time().replace(hour=login_hours, 
+                                                                           minute=login_minutes))
+                    shift_end = datetime.combine(entry_datetime.date(), 
+                                               datetime.min.time().replace(hour=logout_hours, 
+                                                                         minute=logout_minutes))
+                    
+                    # Make timezone-aware
+                    shift_start = convert_to_local_time(shift_start)
+                    shift_end = convert_to_local_time(shift_end)
+            
+            if not shift_start or not shift_end:
+                return False, "No shift timing found"
+            
+            # Calculate expected shift duration (y)
+            shift_duration = (shift_end - shift_start).total_seconds()
+            
+            # Check if early exit
+            is_early_exit = time_spent < shift_duration
+            
+            if is_early_exit:
+                # Calculate how early they left
+                early_minutes = int((shift_duration - time_spent) / 60)
+                return True, f"Left {early_minutes} minutes early"
+            
+            return False, "Not an early exit"
+            
+        except Exception as e:
+            logger.error(f"Error checking early exit: {str(e)}")
+            return False, f"Error checking early exit: {str(e)}"
 
 
 class OfficeTiming(BaseModel):
