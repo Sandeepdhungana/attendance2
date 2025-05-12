@@ -93,11 +93,28 @@ class Employee(BaseModel):
 
 
 class Attendance(BaseModel):
+    # Class-level cache for employee and shift information
+    _employee_cache = {}
+    _shift_cache = {}
+    _office_timing_cache = None
+
     def __init__(self):
         super().__init__("Attendance")
         self.timestamp = get_local_time()
         self.is_late = False
         self.is_early_exit = False
+        # Clear caches periodically (e.g., every hour)
+        self._last_cache_clear = get_local_time()
+        self._cache_ttl = 3600  # 1 hour in seconds
+
+    def _clear_caches_if_needed(self):
+        """Clear caches if they are too old"""
+        current_time = get_local_time()
+        if (current_time - self._last_cache_clear).total_seconds() > self._cache_ttl:
+            self._employee_cache.clear()
+            self._shift_cache.clear()
+            self._office_timing_cache = None
+            self._last_cache_clear = current_time
 
     def check_late_arrival(
         self,
@@ -202,40 +219,45 @@ class Attendance(BaseModel):
             exit_time = get_local_time()
 
         today = get_local_date()
+        self._clear_caches_if_needed()
 
-        # Query for employee data to get their shift
-        employees = db_query("Employee", where={
-                             "employee_id": employee_id}, limit=1)
-        if not employees:
-            return False, None
+        # Check employee cache first
+        if employee_id not in self._employee_cache:
+            # Query for employee data to get their shift
+            employees = db_query("Employee", where={"employee_id": employee_id}, limit=1)
+            if not employees:
+                return False, None
+            self._employee_cache[employee_id] = employees[0]
 
-        employee = employees[0]
+        employee = self._employee_cache[employee_id]
         shift_id = employee.get("shift")
 
         # If no shift assigned, use default office timings
         if not shift_id or not isinstance(shift_id, dict) or not shift_id.get("objectId"):
-            office_timings = db_query("OfficeTiming", limit=1)
+            # Check office timing cache
+            if self._office_timing_cache is None:
+                office_timings = db_query("OfficeTiming", limit=1)
+                if not office_timings:
+                    return False, None
+                self._office_timing_cache = office_timings[0]
 
-            if not office_timings:
-                return False, None
-
-            logout_time_str = office_timings[0].get("logout_time")
+            logout_time_str = self._office_timing_cache.get("logout_time")
         else:
-            # Get shift details
-            shifts = db_query(
-                "Shift", where={"objectId": shift_id.get("objectId")}, limit=1)
+            # Get shift details from cache or query
+            shift_object_id = shift_id.get("objectId")
+            if shift_object_id not in self._shift_cache:
+                shifts = db_query("Shift", where={"objectId": shift_object_id}, limit=1)
+                if not shifts:
+                    return False, None
+                self._shift_cache[shift_object_id] = shifts[0]
 
-            if not shifts:
-                return False, None
-
-            logout_time_str = shifts[0].get("logout_time")
+            logout_time_str = self._shift_cache[shift_object_id].get("logout_time")
 
         if not logout_time_str:
             return False, None
 
         # Parse logout time
-        logout_time_hours, logout_time_minutes = map(
-            int, logout_time_str.split(":"))
+        logout_time_hours, logout_time_minutes = map(int, logout_time_str.split(":"))
 
         # Create datetime object for the logout time today
         logout_time = datetime.combine(today,

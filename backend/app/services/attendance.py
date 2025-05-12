@@ -13,9 +13,17 @@ def get_attendance_records() -> List[Dict[str, Any]]:
     attendance_model = Attendance()
     attendances = attendance_model.query()
 
+    # Get all unique employee IDs
+    employee_ids = {att["employee_id"] for att in attendances}
+    
+    # Batch fetch all employees in one query
+    employees = db_query("Employee", where={"employee_id": {"$inQuery": {"where": {"employee_id": list(employee_ids)}}}})
+    
+    # Create a lookup dictionary for quick employee access
+    employee_lookup = {emp["employee_id"]: emp for emp in employees}
     
     return [{
-        "name": db_query("Employee", where={"employee_id": att["employee_id"]}, limit=1)[0].get("name"),
+        "name": employee_lookup.get(att["employee_id"], {}).get("name", "Unknown"),
         "objectId": att["objectId"],
         "id": att["employee_id"],  # Set id to employee_id for consistency with websocket
         "employee_id": att["employee_id"],

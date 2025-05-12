@@ -212,34 +212,39 @@ def get_early_exit_reasons():
         # Query all early exit reasons from Back4app, ordered by creation date
         reasons = query("EarlyExitReason", order="-created_at")
         
+        # Get all unique employee IDs and attendance IDs
+        employee_ids = {reason.get("employee_id") for reason in reasons if reason.get("employee_id")}
+        attendance_ids = {reason.get("attendance_id") for reason in reasons if reason.get("attendance_id")}
+        
+        # Batch fetch all employees and attendance records
+        employees = query("Employee", where={"employee_id": {"$inQuery": {"where": {"employee_id": list(employee_ids)}}}})
+        attendance_records = query("Attendance", where={"objectId": {"$inQuery": {"where": {"objectId": list(attendance_ids)}}}})
+        
+        # Create lookup dictionaries
+        employee_lookup = {emp["employee_id"]: emp for emp in employees}
+        attendance_lookup = {att["objectId"]: att for att in attendance_records}
+        
         # Format the response
         formatted_reasons = []
         for reason in reasons:
-            # Get employee info
             employee_id = reason.get("employee_id")
             employee_name = "Unknown"
             
-            if employee_id:
-                employee_records = query("Employee", where={"employee_id": employee_id}, limit=1)
-                if employee_records and len(employee_records) > 0:
-                    employee = employee_records[0]
-                    if isinstance(employee, dict):
-                        employee_name = employee.get("name", "Unknown")
+            if employee_id and employee_id in employee_lookup:
+                employee = employee_lookup[employee_id]
+                employee_name = employee.get("name", "Unknown")
             
             # Get attendance info to check is_early_exit status
             attendance_id = reason.get("attendance_id")
             is_early_exit = False
             exit_time = None
             
-            if attendance_id:
-                attendance_records = query("Attendance", where={"objectId": attendance_id}, limit=1)
-                if attendance_records and len(attendance_records) > 0:
-                    attendance = attendance_records[0]
-                    if isinstance(attendance, dict):
-                        is_early_exit = attendance.get("is_early_exit", False)
-                        exit_time_obj = attendance.get("exit_time", {})
-                        if isinstance(exit_time_obj, dict) and exit_time_obj.get("iso"):
-                            exit_time = exit_time_obj.get("iso")
+            if attendance_id and attendance_id in attendance_lookup:
+                attendance = attendance_lookup[attendance_id]
+                is_early_exit = attendance.get("is_early_exit", False)
+                exit_time_obj = attendance.get("exit_time", {})
+                if isinstance(exit_time_obj, dict) and exit_time_obj.get("iso"):
+                    exit_time = exit_time_obj.get("iso")
             
             formatted_reasons.append({
                 "id": reason.get("objectId"),
