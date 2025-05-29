@@ -39,8 +39,10 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     # Check if attendance already marked for today
     today = get_local_date()
     today_start = datetime.combine(today, datetime.min.time())
-    today_start = convert_to_local_time(today_start)
     today_end = datetime.combine(today, datetime.max.time())
+    
+    # Convert to timezone-aware datetime objects
+    today_start = convert_to_local_time(today_start)
     today_end = convert_to_local_time(today_end)
 
     # Get any existing attendance record for today
@@ -57,6 +59,7 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
     
     existing_attendance = existing_attendance[0] if existing_attendance else None
     current_time = get_local_time()
+    logger.info(f"Current time: {current_time}")
     
     # Format similarity to 2 decimal places
     rounded_similarity = round(similarity, 2)
@@ -247,6 +250,8 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
         "minutes_late": late_minutes if is_late else None,
         "time_components": time_components if is_late else None
     }
+
+    logger.info(f"New attendance data: {new_attendance_data}")
     
     new_attendance = create("Attendance", new_attendance_data)
     

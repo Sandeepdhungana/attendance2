@@ -15,20 +15,27 @@ class TimezoneConfigCache:
         """Get timezone configuration with caching"""
         current_time = datetime.now()
         
-        # Clear cache if needed
-        if cls._cache is None or cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
+        # Clear cache if needed - check for None first to avoid TypeError
+        cache_expired = (
+            cls._cache is None or 
+            cls._last_clear is None or 
+            (cls._last_clear is not None and (current_time - cls._last_clear).total_seconds() > cls._cache_ttl)
+        )
+        
+        if cache_expired:
             try:
                 timezone_config = db_query("TimezoneConfig", limit=1)
                 if timezone_config:
                     cls._cache = timezone_config[0]
                 else:
-                    # Default to UTC if no config found
-                    cls._cache = {"timezone": "UTC"}
+                    # Default to Asia/Dubai if no config found
+                    cls._cache = {"timezone": "Asia/Dubai"}
                 cls._last_clear = current_time
+                logger.info(f"Timezone config cache refreshed")
             except Exception as e:
                 logger.error(f"Error fetching timezone config: {str(e)}")
-                # Fallback to UTC if query fails
-                cls._cache = {"timezone": "UTC"}
+                # Fallback to Asia/Dubai if query fails
+                cls._cache = {"timezone": "Asia/Dubai"}
                 cls._last_clear = current_time
         
         return cls._cache
@@ -37,26 +44,27 @@ def get_local_time():
     """Get current time in local timezone"""
     try:
         config = TimezoneConfigCache.get_timezone_config()
-        timezone_str = config.get("timezone", "UTC")
+        timezone_str = config.get("timezone", "Asia/Dubai")
+        
         timezone = pytz.timezone(timezone_str)
         return datetime.now(timezone)
     except Exception as e:
         logger.error(f"Error getting local time: {str(e)}")
-        return datetime.now(pytz.UTC)
+        return datetime.now(pytz.timezone("Asia/Dubai"))
 
 def convert_to_local_time(dt: datetime) -> datetime:
     """Convert a datetime to local timezone"""
     try:
         if dt.tzinfo is None:
-            dt = pytz.UTC.localize(dt)
+            dt = pytz.timezone("Asia/Dubai").localize(dt)
         
         config = TimezoneConfigCache.get_timezone_config()
-        timezone_str = config.get("timezone", "UTC")
+        timezone_str = config.get("timezone", "Asia/Dubai")
         timezone = pytz.timezone(timezone_str)
         return dt.astimezone(timezone)
     except Exception as e:
         logger.error(f"Error converting to local time: {str(e)}")
-        return dt.astimezone(pytz.UTC)
+        return dt.astimezone(pytz.timezone("Asia/Dubai"))
 
 def get_local_date():
     """Get current date in local timezone"""

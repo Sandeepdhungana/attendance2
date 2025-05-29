@@ -490,22 +490,44 @@ def get_attendance_by_date(date: str):
                 detail="Invalid date format. Please use YYYY-MM-DD format."
             )
         
-        # Get start and end of the day in local timezone
+        # Get the local timezone from configuration
+        local_timezone = get_local_time().tzinfo
+        
+        # Create timezone-aware start and end of day
         day_start = datetime.combine(parsed_date, datetime.min.time())
         day_end = datetime.combine(parsed_date, datetime.max.time())
+        
+        # Localize to the local timezone
+        day_start = local_timezone.localize(day_start)
+        day_end = local_timezone.localize(day_end)
         
         # Convert to ISO format for database query
         day_start_iso = day_start.isoformat()
         day_end_iso = day_end.isoformat()
+
+        logger.info(f"Timezone-aware day start: {day_start_iso}")
+        logger.info(f"Timezone-aware day end: {day_end_iso}")
+        logger.info(f"Date: {date}")
+        logger.info(f"Local timezone: {local_timezone}")
         
         logger.info(f"Fetching attendance records for date: {date}")
         
-        # Query attendance records for the specified date
+        # Query attendance records for the specified date using both entry_time and timestamp
         attendance_records = query("Attendance", where={
-            "timestamp": {
-                "$gte": {"__type": "Date", "iso": day_start_iso},
-                "$lte": {"__type": "Date", "iso": day_end_iso}
-            }
+            "$or": [
+                {
+                    "entry_time": {
+                        "$gte": day_start_iso,
+                        "$lte": day_end_iso
+                    }
+                },
+                {
+                    "timestamp": {
+                        "$gte": {"__type": "Date", "iso": day_start_iso},
+                        "$lte": {"__type": "Date", "iso": day_end_iso}
+                    }
+                }
+            ]
         }, order="-timestamp")
         
         if not attendance_records:
@@ -527,13 +549,18 @@ def get_attendance_by_date(date: str):
             employee = employee_lookup.get(att["employee_id"])
             employee_name = employee.get("name", "Unknown") if employee else "Unknown"
             
+            # Get entry_time, preferring the direct field over timestamp
+            entry_time = att.get("entry_time")
+            if not entry_time:
+                entry_time = att.get("timestamp", {}).get("iso") if isinstance(att.get("timestamp"), dict) else att.get("timestamp")
+            
             result.append({
                 "name": employee_name,
                 "objectId": att["objectId"],
                 "id": att["employee_id"],
                 "employee_id": att["employee_id"],
                 "timestamp": att["timestamp"],
-                "entry_time": att.get("timestamp", {}).get("iso") if isinstance(att.get("timestamp"), dict) else att.get("timestamp"),
+                "entry_time": entry_time,
                 "exit_time": att.get("exit_time", {}).get("iso") if isinstance(att.get("exit_time"), dict) else att.get("exit_time"),
                 "confidence": att.get("confidence", 0),
                 "is_late": att.get("is_late", False),

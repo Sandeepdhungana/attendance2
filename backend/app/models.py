@@ -22,10 +22,10 @@ HEADERS = {
 
 # Get local timezone
 try:
-    local_tz = pytz.timezone('Asia/Kolkata')
+    local_tz = pytz.timezone('Asia/Dubai')
 except:
     from datetime import timezone, timedelta
-    local_tz = timezone(timedelta(hours=5, minutes=30))
+    local_tz = timezone(timedelta(hours=4, minutes=00))
 
 
 def get_local_time():
@@ -260,8 +260,10 @@ class Attendance(BaseModel):
             
             # Get attendance record for today
             today_start = datetime.combine(today, datetime.min.time())
-            today_start = convert_to_local_time(today_start)
             today_end = datetime.combine(today, datetime.max.time())
+            
+            # Convert to timezone-aware datetime objects
+            today_start = convert_to_local_time(today_start)
             today_end = convert_to_local_time(today_end)
             
             attendance = db_query("Attendance", 
@@ -402,8 +404,8 @@ class EarlyExitReason(BaseModel):
 class TimezoneConfig(BaseModel):
     def __init__(self):
         super().__init__("TimezoneConfig")
-        self.timezone_name = 'Asia/Kolkata'
-        self.timezone_offset = '+05:30'
+        self.timezone_name = 'Asia/Dubai'
+        self.timezone_offset = '+04:00'
 
 
 class Shift(BaseModel):

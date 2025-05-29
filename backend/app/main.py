@@ -131,8 +131,8 @@ def initialize_back4app():
     if not timezone_config:
         timezone = TimezoneConfig()
         timezone.create({
-            "timezone_name": "Asia/Kolkata",
-            "timezone_offset": "+05:30"
+            "timezone_name": "Asia/Dubai",
+            "timezone_offset": "+04:00"
         })
         logger.info("Created default timezone configuration")
 

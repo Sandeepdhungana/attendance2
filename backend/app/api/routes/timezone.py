@@ -24,7 +24,7 @@ def get_timezone():
     timezone_configs = query("TimezoneConfig", limit=1)
     if not timezone_configs:
         # Return default if no configuration exists
-        return {"timezone": "Asia/Kolkata"}
+        return {"timezone": "Asia/Dubai"}
     return {"timezone": timezone_configs[0]["timezone_name"]}
 
 @router.post("/timezone")
