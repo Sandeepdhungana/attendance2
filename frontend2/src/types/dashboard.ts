@@ -2,6 +2,7 @@ export interface AttendanceRecord {
   id: string;
   objectId: string;
   employee_id: string;
+  name?: string; // Employee name for search
   entry_time: string;
   exit_time: string;
   confidence: number;
@@ -16,6 +17,15 @@ export interface User {
   employee_id: string;
   objectId?: string;
   name: string;
+  department?: string;
+  position?: string;
+  status?: string;
+  shift?: {
+    objectId: string;
+    name: string;
+    login_time: string;
+    logout_time: string;
+  };
   created_at: string;
 }
 

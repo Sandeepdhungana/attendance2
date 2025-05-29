@@ -9,11 +9,14 @@ export function useDashboard() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [filteredRecords, setFilteredRecords] = useState<AttendanceRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [filteredUsers, setFilteredUsers] = useState<User[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(true);
   const [usersLoading, setUsersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tabValue, setTabValue] = useState(0);
   const [dateFilter, setDateFilter] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
   const [userDeleteDialog, setUserDeleteDialog] = useState<DeleteDialogState<User>>({
     open: false,
     item: null,
@@ -46,6 +49,7 @@ export function useDashboard() {
       // Fetch users
       const usersResponse = await api.get('/employees');
       setUsers(usersResponse.data);
+      setFilteredUsers(usersResponse.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
@@ -76,10 +80,52 @@ export function useDashboard() {
     }
   }, []);
 
+  // Filter attendance records based on search query
+  const filterAttendanceRecords = useCallback((records: AttendanceRecord[], query: string) => {
+    if (!query.trim()) return records;
+    
+    return records.filter(record => 
+      record.name?.toLowerCase().includes(query.toLowerCase()) ||
+      record.employee_id?.toLowerCase().includes(query.toLowerCase())
+    );
+  }, []);
+
+  // Filter users based on search query
+  const filterUsers = useCallback((users: User[], query: string) => {
+    if (!query.trim()) return users;
+    
+    return users.filter(user => 
+      user.name?.toLowerCase().includes(query.toLowerCase()) ||
+      user.employee_id?.toLowerCase().includes(query.toLowerCase()) ||
+      user.department?.toLowerCase().includes(query.toLowerCase()) ||
+      user.position?.toLowerCase().includes(query.toLowerCase())
+    );
+  }, []);
+
+  // Handle attendance search
+  const handleAttendanceSearch = useCallback((query: string) => {
+    setAttendanceSearchQuery(query);
+    const filtered = filterAttendanceRecords(filteredRecords, query);
+    // We'll use this in the component to filter the displayed records
+  }, [filteredRecords, filterAttendanceRecords]);
+
+  // Handle employee search
+  const handleEmployeeSearch = useCallback((query: string) => {
+    setEmployeeSearchQuery(query);
+    const filtered = filterUsers(users, query);
+    setFilteredUsers(filtered);
+  }, [users, filterUsers]);
+
   // Update filtered records whenever dateFilter changes
   useEffect(() => {
     fetchDataByDate(dateFilter);
   }, [dateFilter, fetchDataByDate]);
+
+  // Update filtered users when search query changes
+  useEffect(() => {
+    const filtered = filterUsers(users, employeeSearchQuery);
+    setFilteredUsers(filtered);
+  }, [users, employeeSearchQuery, filterUsers]);
 
   // Initial data fetch
   useEffect(() => {
@@ -108,6 +154,9 @@ export function useDashboard() {
           // Only update if we have new data
           if (data.data && Array.isArray(data.data)) {
             setUsers(data.data);
+            // Apply current search filter to the new data
+            const filtered = filterUsers(data.data, employeeSearchQuery);
+            setFilteredUsers(filtered);
           }
           setUsersLoading(false);
           setError(null);
@@ -150,7 +199,7 @@ export function useDashboard() {
     return () => {
       ws.removeEventListener('message', handleMessage);
     };
-  }, [ws, dateFilter, fetchDataByDate]);
+  }, [ws, dateFilter, fetchDataByDate, employeeSearchQuery, filterUsers]);
 
   // Request data via WebSocket when connected
   useEffect(() => {
@@ -181,6 +230,7 @@ export function useDashboard() {
     
     // Optimistic UI update - remove the user from state immediately
     setUsers(prevUsers => prevUsers.filter(u => u.employee_id !== identifierToFilter));
+    setFilteredUsers(prevUsers => prevUsers.filter(u => u.employee_id !== identifierToFilter));
     
     try {
       // Make the API call
@@ -240,12 +290,15 @@ export function useDashboard() {
   return {
     records: filteredRecords,
     allRecords: records,
-    users,
+    users: filteredUsers,
+    allUsers: users,
     recordsLoading,
     usersLoading,
     error,
     tabValue,
     dateFilter,
+    attendanceSearchQuery,
+    employeeSearchQuery,
     userDeleteDialog,
     attendanceDeleteDialog,
     paginationModel,
@@ -254,9 +307,12 @@ export function useDashboard() {
     handleUserDeleteConfirm,
     handleAttendanceDeleteClick,
     handleAttendanceDeleteConfirm,
+    handleAttendanceSearch,
+    handleEmployeeSearch,
     setPaginationModel,
     setUserDeleteDialog,
     setAttendanceDeleteDialog,
     setDateFilter,
+    filterAttendanceRecords, // For filtering displayed records in component
   };
 } 

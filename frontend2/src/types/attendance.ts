@@ -47,15 +47,14 @@ export interface AttendanceUpdate {
 
 export interface EarlyExitReason {
   id: string;
-  user_id: string;
-  user_name: string;
+  employee_id: string;
+  employee_name: string;
   attendance_id: string;
   reason: string;
   timestamp: string | {
     __type: string;
     iso: string;
   };
-  name?: string;
   is_early_exit?: boolean;
   exit_time?: string | null;
 }

@@ -15,6 +15,8 @@ import Shift from './pages/Shift';
 import Shifts from './pages/Shifts';
 import EmployeeShifts from './pages/EmployeeShifts';
 import AttendanceByDate from './pages/AttendanceByDate';
+import Filter from './pages/Filter';
+import ProfileUpdate from './pages/ProfileUpdate';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { NotificationProvider } from './components/ui/NotificationProvider';
 
@@ -49,7 +51,7 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
       wsRef.current = null;
     }
 
-    const ws = new WebSocket('/ws/attendance');
+    const ws = new WebSocket('http://localhost:8000/ws/attendance');
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -293,6 +295,8 @@ function App() {
                 <Route path="/shift/:id?" element={<Shift />} />
                 <Route path="/shifts" element={<Shifts />} />
                 <Route path="/employee-shifts" element={<EmployeeShifts />} />
+                <Route path="/filter" element={<Filter />} />
+                <Route path="/profile/update/:employee_id" element={<ProfileUpdate />} />
               </Routes>
             </Layout>
           </LocalizationProvider>

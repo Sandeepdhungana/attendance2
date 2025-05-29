@@ -16,23 +16,38 @@ import {
   Divider,
   Stack,
   CircularProgress,
+  TextField,
+  InputAdornment,
 } from '@mui/material';
 import { GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import { format, addDays } from 'date-fns';
-import { Delete as DeleteIcon, CalendarToday, Group, ArrowBack, ArrowForward, Today } from '@mui/icons-material';
+import { 
+  Delete as DeleteIcon, 
+  CalendarToday, 
+  Group, 
+  ArrowBack, 
+  ArrowForward, 
+  Today, 
+  Edit as EditIcon,
+  Search as SearchIcon,
+  Clear as ClearIcon
+} from '@mui/icons-material';
 import { useDashboard } from '../hooks/useDashboard';
 import { TabPanel } from '../components/dashboard/TabPanel';
 import { DeleteDialog } from '../components/dashboard/DeleteDialog';
 import { DataTable } from '../components/dashboard/DataTable';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { AttendanceRecord, User } from '../types/dashboard';
+import { useNavigate } from 'react-router-dom';
 
 export default function Dashboard() {
   const theme = useTheme();
+  const navigate = useNavigate();
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const {
     records,
     users,
+    allUsers,
     recordsLoading,
     usersLoading,
     error,
@@ -40,15 +55,20 @@ export default function Dashboard() {
     userDeleteDialog,
     attendanceDeleteDialog,
     paginationModel,
+    attendanceSearchQuery,
+    employeeSearchQuery,
     handleTabChange,
     handleUserDeleteClick,
     handleUserDeleteConfirm,
     handleAttendanceDeleteClick,
     handleAttendanceDeleteConfirm,
+    handleAttendanceSearch,
+    handleEmployeeSearch,
     setPaginationModel,
     setUserDeleteDialog,
     setAttendanceDeleteDialog,
     setDateFilter,
+    filterAttendanceRecords,
   } = useDashboard();
 
   // Format date for display
@@ -82,6 +102,14 @@ export default function Dashboard() {
       setDateFilter(format(newDate, 'yyyy-MM-dd'));
     }
   };
+
+  // Handle edit employee
+  const handleEditEmployee = (employee: User) => {
+    navigate(`/profile/update/${employee.employee_id}`);
+  };
+
+  // Filter attendance records for display
+  const displayedAttendanceRecords = filterAttendanceRecords(records, attendanceSearchQuery);
 
   const attendanceColumns: GridColDef[] = [
     { field: 'employee_id', headerName: 'Employee ID', width: 150 },
@@ -217,25 +245,45 @@ export default function Dashboard() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
+      width: 180,
+      sortable: false,
       renderCell: (params: GridRenderCellParams) => (
-        <Button
-          variant="outlined"
-          color="error"
-          size="small"
-          startIcon={<DeleteIcon />}
-          onClick={() => handleUserDeleteClick(params.row)}
-          sx={{
-            borderRadius: '8px',
-            textTransform: 'none',
-            fontWeight: 600,
-            '&:hover': {
-              backgroundColor: alpha(theme.palette.error.main, 0.1),
-            }
-          }}
-        >
-          Delete
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            color="primary"
+            size="small"
+            startIcon={<EditIcon />}
+            onClick={() => handleEditEmployee(params.row)}
+            sx={{
+              borderRadius: '8px',
+              textTransform: 'none',
+              fontWeight: 600,
+              '&:hover': {
+                backgroundColor: alpha(theme.palette.primary.main, 0.1),
+              }
+            }}
+          >
+            Edit
+          </Button>
+          <Button
+            variant="outlined"
+            color="error"
+            size="small"
+            startIcon={<DeleteIcon />}
+            onClick={() => handleUserDeleteClick(params.row)}
+            sx={{
+              borderRadius: '8px',
+              textTransform: 'none',
+              fontWeight: 600,
+              '&:hover': {
+                backgroundColor: alpha(theme.palette.error.main, 0.1),
+              }
+            }}
+          >
+            Delete
+          </Button>
+        </Stack>
       ),
     },
   ];
@@ -262,7 +310,7 @@ export default function Dashboard() {
           >
             <CalendarToday color="primary" fontSize="small" sx={{ mr: 1 }} />
             <Typography variant="body2" fontWeight="600" color="primary.main">
-              {records.length} Attendance Records
+              {attendanceSearchQuery ? `${displayedAttendanceRecords.length}/${records.length}` : records.length} Attendance Records
             </Typography>
           </Paper>
           
@@ -280,7 +328,7 @@ export default function Dashboard() {
           >
             <Group color="success" fontSize="small" sx={{ mr: 1 }} />
             <Typography variant="body2" fontWeight="600" color="success.main">
-              {users.length} Employees
+              {employeeSearchQuery ? `${users.length}/${allUsers.length}` : allUsers.length} Employees
             </Typography>
           </Paper>
         </Box>
@@ -343,7 +391,7 @@ export default function Dashboard() {
           <Box sx={{ flexGrow: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <TabPanel value={tabValue} index={0}>
               <Box sx={{ p: 2, borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
-                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
                   <Stack direction="row" alignItems="center" spacing={1}>
                     <IconButton onClick={goToPreviousDay} size="small">
                       <ArrowBack fontSize="small" />
@@ -374,9 +422,37 @@ export default function Dashboard() {
                     </IconButton>
                   </Stack>
                   
-                  <Typography variant="subtitle1" fontWeight="600" color="text.secondary">
-                    {formattedDate}
-                  </Typography>
+                  <Stack direction="row" alignItems="center" spacing={2}>
+                    <TextField
+                      size="small"
+                      placeholder="Search by employee name or ID..."
+                      value={attendanceSearchQuery}
+                      onChange={(e) => handleAttendanceSearch(e.target.value)}
+                      sx={{ width: 300 }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchIcon fontSize="small" color="action" />
+                          </InputAdornment>
+                        ),
+                        endAdornment: attendanceSearchQuery && (
+                          <InputAdornment position="end">
+                            <IconButton
+                              size="small"
+                              onClick={() => handleAttendanceSearch('')}
+                            >
+                              <ClearIcon fontSize="small" />
+                            </IconButton>
+                          </InputAdornment>
+                        ),
+                        sx: { borderRadius: 2 }
+                      }}
+                    />
+                    
+                    <Typography variant="subtitle1" fontWeight="600" color="text.secondary">
+                      {formattedDate}
+                    </Typography>
+                  </Stack>
                 </Stack>
               </Box>
               
@@ -412,7 +488,7 @@ export default function Dashboard() {
                   display: 'flex'
                 }}>
                   <DataTable<AttendanceRecord>
-                    rows={records}
+                    rows={displayedAttendanceRecords}
                     columns={attendanceColumns}
                     loading={recordsLoading}
                     paginationModel={paginationModel}
@@ -435,6 +511,43 @@ export default function Dashboard() {
             </TabPanel>
 
             <TabPanel value={tabValue} index={1}>
+              <Box sx={{ 
+                p: 2, 
+                borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <Typography variant="h6" fontWeight="600" color="text.primary">
+                  Employee Management
+                </Typography>
+                <TextField
+                  size="small"
+                  placeholder="Search employees..."
+                  value={employeeSearchQuery}
+                  onChange={(e) => handleEmployeeSearch(e.target.value)}
+                  sx={{ width: 350 }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon fontSize="small" color="action" />
+                      </InputAdornment>
+                    ),
+                    endAdornment: employeeSearchQuery && (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          onClick={() => handleEmployeeSearch('')}
+                        >
+                          <ClearIcon fontSize="small" />
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                    sx: { borderRadius: 2 }
+                  }}
+                />
+              </Box>
+              
               <Box sx={{ 
                 flex: 1,
                 overflow: 'hidden',

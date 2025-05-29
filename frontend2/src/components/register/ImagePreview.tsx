@@ -1,15 +1,35 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Typography, Paper, alpha, useTheme } from '@mui/material';
 import { CheckCircle, Image } from '@mui/icons-material';
 
 interface ImagePreviewProps {
-  image: string | null;
+  image: string | File | null;
 }
 
 export const ImagePreview: React.FC<ImagePreviewProps> = ({ image }) => {
   const theme = useTheme();
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   
-  if (!image) return null;
+  useEffect(() => {
+    if (!image) {
+      setPreviewUrl(null);
+      return;
+    }
+
+    if (typeof image === 'string') {
+      // Base64 string from webcam
+      setPreviewUrl(image);
+    } else {
+      // File object from upload
+      const url = URL.createObjectURL(image);
+      setPreviewUrl(url);
+      
+      // Cleanup function to revoke object URL
+      return () => URL.revokeObjectURL(url);
+    }
+  }, [image]);
+  
+  if (!image || !previewUrl) return null;
 
   return (
     <Box sx={{ mt: 3 }}>
@@ -41,7 +61,7 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ image }) => {
         }}
       >
         <img
-          src={image}
+          src={previewUrl}
           alt="Captured"
           style={{ 
             maxWidth: '100%', 

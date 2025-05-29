@@ -105,6 +105,7 @@ def delete(class_name, object_id):
 
 def create_class_schema(class_name: str, fields: dict):
     """Create a new class schema in Back4App"""
+    return
     schema = {
         "className": class_name,
         "fields": {}

@@ -43,6 +43,7 @@ import {
   WifiOff as WifiOffIcon,
   Wifi as WifiIcon,
   ChevronLeft as ChevronLeftIcon,
+  FilterList as FilterListIcon,
 } from '@mui/icons-material';
 import { useWebSocket } from '../App';
 
@@ -57,6 +58,7 @@ const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Register Employee', icon: <PersonAddIcon />, path: '/register' },
   { text: 'Attendance', icon: <AccessTimeIcon />, path: '/attendance' },
+  { text: 'Filter & Analytics', icon: <FilterListIcon />, path: '/filter' },
   { text: 'Employee Shifts', icon: <SwapHorizIcon />, path: '/employee-shifts' },
 ];
 

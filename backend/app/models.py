@@ -75,7 +75,7 @@ class BaseModel:
                 f"Error deleting {self.class_name} with objectId {object_id}: {str(e)}")
             raise
 
-    def query(self, where=None, order=None, limit=None):
+    def query(self, where=None, order=None, limit=None, inn=None):
         params = {}
         if where:
             params["where"] = where
@@ -83,6 +83,10 @@ class BaseModel:
             params["order"] = order
         if limit:
             params["limit"] = limit
+        if inn:
+            params["in"] = inn
+
+        logger.info(f"Querying {self.class_name} with params: {params}")
 
         response = requests.get(self.base_url, headers=HEADERS, params=params)
         data = response.json()

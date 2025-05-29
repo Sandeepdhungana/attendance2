@@ -3,7 +3,7 @@ import Webcam from 'react-webcam';
 import { SelectChangeEvent } from '@mui/material';
 
 export const useCameraCapture = () => {
-  const [image, setImage] = useState<string | null>(null);
+  const [image, setImage] = useState<string | File | null>(null);
   const [captureType, setCaptureType] = useState<'webcam' | 'upload'>('webcam');
   const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
   const [selectedCamera, setSelectedCamera] = useState<string>('');
@@ -13,21 +13,32 @@ export const useCameraCapture = () => {
   useEffect(() => {
     const getCameras = async () => {
       try {
+        // Request permission first before enumerating devices
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(track => track.stop()); // Stop the stream immediately
+        
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        
+        console.log('Available cameras:', videoDevices);
         setAvailableCameras(videoDevices);
         
         if (videoDevices.length > 0) {
           setSelectedCamera(videoDevices[0].deviceId);
+        } else {
+          console.warn('No video input devices found');
         }
       } catch (error) {
-        console.error('Error enumerating cameras:', error);
-        throw new Error('Failed to access cameras. Please check your camera permissions.');
+        console.error('Error accessing cameras:', error);
+        // Don't throw error to prevent component crash, just log it
+        setAvailableCameras([]);
       }
     };
 
-    getCameras();
-  }, []);
+    if (captureType === 'webcam') {
+      getCameras();
+    }
+  }, [captureType]);
 
   const handleCameraChange = (event: SelectChangeEvent) => {
     setSelectedCamera(event.target.value);
@@ -55,11 +66,13 @@ export const useCameraCapture = () => {
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      console.log('File selected:', file.name, file.type, file.size);
+      // Store the file object directly for form submission
+      setImage(file);
+    }
+    // Clear the input to allow selecting the same file again
+    if (event.target) {
+      event.target.value = '';
     }
   };
 

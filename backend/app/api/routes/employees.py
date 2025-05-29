@@ -6,6 +6,7 @@ from app.utils.time_utils import get_local_time
 from app.dependencies import get_queues
 from app.models import Employee
 from app.services.send_email import send_welcome_email
+from app.database import query as db_query
 from pydantic import BaseModel
 import cv2
 import numpy as np
@@ -33,14 +34,78 @@ def get_employees_route():
 
 @router.get("/employees/{employee_id}")
 def get_employee_route(employee_id: str):
-    """Get a specific employee"""
+    """Get a specific employee by employee_id"""
     try:
-        employee = Employee().get(employee_id)
-        if not employee:
+        logger.info(f"Fetching employee with ID: {employee_id}")
+        
+        # Query by employee_id, not objectId
+        employees = db_query("Employee", where={
+            "employee_id": {
+                "$in": [employee_id]
+            }
+        })
+
+        
+        if not employees:
+            logger.warning(f"Employee not found with ID: {employee_id}")
             raise HTTPException(status_code=404, detail="Employee not found")
-        return employee
+        
+        employee = employees[0]
+        logger.info(f"Found employee: {employee.get('name')} with objectId: {employee.get('objectId')}")
+        
+        # Format the response with shift information
+        shift = None
+        try:
+            if employee.get("shift"):
+                if isinstance(employee["shift"], dict) and employee["shift"].get("objectId"):
+                    shift_id = employee["shift"]["objectId"]
+                    logger.info(f"Looking up shift with ID: {shift_id}")
+                    shifts = db_query("Shift", where={"objectId": shift_id})
+                    if shifts:
+                        shift = shifts[0]
+                        logger.info(f"Found shift: {shift.get('name')}")
+                    else:
+                        logger.warning(f"Shift not found with ID: {shift_id}")
+                else:
+                    logger.info(f"Employee shift data format: {employee.get('shift')}")
+        except Exception as shift_error:
+            logger.error(f"Error fetching shift data: {str(shift_error)}")
+            # Continue without shift data rather than failing completely
+            shift = None
+        
+        # Safely get date fields
+        created_at = employee.get("createdAt")
+        updated_at = employee.get("updatedAt")
+        
+        # Handle different date formats that might come from Parse Server
+        if isinstance(created_at, dict) and "iso" in created_at:
+            created_at = created_at["iso"]
+        if isinstance(updated_at, dict) and "iso" in updated_at:
+            updated_at = updated_at["iso"]
+        
+        formatted_employee = {
+            "objectId": employee.get("objectId"),
+            "employee_id": employee.get("employee_id"),
+            "name": employee.get("name"),
+            "department": employee.get("department", ""),
+            "position": employee.get("position", ""),
+            "status": employee.get("status", "active"),
+            "email": employee.get("email", ""),
+            "phone_number": employee.get("phone_number", ""),
+            "shift": shift,
+            "created_at": created_at,
+            "updated_at": updated_at
+        }
+        
+        logger.info(f"Successfully formatted employee data for: {employee_id}")
+        return formatted_employee
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions to preserve status code
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Unexpected error getting employee {employee_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.put("/employees/{employee_id}")
 async def update_employee_route(
@@ -255,4 +320,139 @@ async def register_employee(
         raise HTTPException(
             status_code=400,
             detail=str(e)
+        )
+
+@router.put("/employees/{employee_id}/profile")
+async def update_employee_profile(
+    employee_id: str,
+    name: str = Form(...),
+    department: str = Form(...),
+    position: str = Form(...),
+    status: str = Form("active"),
+    shift_id: str = Form(...),
+    email: Optional[str] = Form(None),
+    phone_number: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None)
+):
+    """Update employee profile with optional photo update"""
+    try:
+        # Find employee by employee_id (not objectId)
+        employee_model = Employee()
+        existing_employees = db_query("Employee", where={
+            "employee_id": {
+                "$in": [employee_id]
+            }
+        })
+        
+        if not existing_employees:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        
+        existing_employee = existing_employees[0]
+        objectId = existing_employee.get("objectId")
+        
+        # Prepare update data
+        update_data = {
+            "name": name,
+            "department": department,
+            "position": position,
+            "status": status,
+            "shift": {
+                "__type": "Pointer",
+                "className": "Shift",
+                "objectId": shift_id
+            }
+        }
+        
+        # Add optional fields
+        if email:
+            update_data["email"] = email
+        if phone_number:
+            update_data["phone_number"] = phone_number
+        
+        # Handle image update if provided
+        if image and image.filename:
+            logger.info(f"Processing image update for employee {employee_id}")
+            
+            # Read and decode image
+            contents = await image.read()
+            nparr = np.frombuffer(contents, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            # Get face embedding
+            face_recognition = get_face_recognition()
+            embedding = face_recognition.get_embedding(img)
+            
+            if embedding is None:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="No face detected in the uploaded image"
+                )
+
+            # Check if this face is already registered by comparing with other employees
+            all_employees = employee_model.query()
+            # Exclude current employee from face similarity check
+            other_employees = [emp for emp in all_employees if emp.get("employee_id") != employee_id]
+            
+            # Find matches with similarity > 0.6
+            face_similarity_threshold = 0.6
+            matches = face_recognition.find_matches_for_embeddings(
+                [embedding], other_employees, threshold=face_similarity_threshold
+            )
+            
+            if matches:
+                # If we found a matching face with similarity > 0.6
+                match = matches[0]  # Get the best match
+                similar_employee = match['employee']
+                similarity = match['similarity']
+                similarity_percent = round(similarity * 100, 1)
+                
+                logger.warning(f"Face similarity match found during update: {similar_employee.get('name')} with {similarity_percent}% similarity")
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Face already registered to another employee: {similar_employee.get('name')} (ID: {similar_employee.get('employee_id')}) with {similarity_percent}% similarity"
+                )
+
+            # Update embedding
+            update_data["embedding"] = face_recognition.embedding_to_str(embedding)
+            logger.info(f"Updated face embedding for employee {employee_id}")
+
+        # Get current time for updatedAt
+        current_time = get_local_time()
+        update_data["updatedAt"] = {
+            "__type": "Date",
+            "iso": current_time.isoformat()
+        }
+        
+        # Update employee using objectId
+        result = employee_model.update(objectId, update_data)
+        
+        # Broadcast update
+        attendance_update = {
+            "action": "update_user",
+            "user_id": employee_id,
+            "name": name,
+            "timestamp": current_time.isoformat()
+        }
+        processing_results_queue, _ = get_queues()
+        processing_results_queue.put({
+            "type": "attendance_update",
+            "data": [attendance_update]
+        })
+        
+        logger.info(f"Employee profile updated successfully: {employee_id} ({name})")
+        return {
+            "message": "Employee profile updated successfully",
+            "employee": result
+        }
+        
+    except HTTPException as he:
+        # Re-raise HTTP exceptions to preserve status code and details
+        logger.error(f"HTTP error during employee profile update: {str(he)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error updating employee profile: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update employee profile: {str(e)}"
         ) 

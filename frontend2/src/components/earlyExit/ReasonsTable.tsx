@@ -27,15 +27,7 @@ import BadgeIcon from '@mui/icons-material/Badge';
 import EventNoteIcon from '@mui/icons-material/EventNote';
 import { format } from 'date-fns';
 import { useState } from 'react';
-
-interface EarlyExitReason {
-  id: string;
-  user_id: string;
-  user_name?: string;
-  attendance_id: string;
-  reason: string;
-  timestamp: string;
-}
+import { EarlyExitReason } from '../../types/attendance';
 
 interface ReasonsTableProps {
   reasons: EarlyExitReason[] | null;
@@ -147,17 +139,33 @@ export const ReasonsTable: React.FC<ReasonsTableProps> = ({
   // Calculate pagination
   const emptyRows = page > 0 ? Math.max(0, (1 + page) * rowsPerPage - reasons.length) : 0;
   const visibleReasons = reasons.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  
 
   const formatTimestamp = (timestamp: string | { __type: string; iso: string }) => {
     try {
+      let dateToFormat: Date;
+      console.log("Timestamp: ", timestamp)
+      
       if (typeof timestamp === 'string') {
-        return format(new Date(timestamp), 'PPp');
+        // Handle ISO 8601 format like "2025-04-25T12:28:41.637Z"
+        dateToFormat = new Date(timestamp);
+        console.log("Date to format: ", dateToFormat)
       } else if (timestamp && typeof timestamp === 'object' && 'iso' in timestamp) {
-        return format(new Date(timestamp.iso), 'PPp');
+        dateToFormat = new Date(timestamp.iso);
+      } else {
+        return 'Invalid date';
       }
-      return 'Invalid date';
+      
+      // Check if the date is valid
+      console.log(dateToFormat)
+      if (isNaN(dateToFormat.getTime())) {
+        return 'Invalid date';
+      }
+      
+      // Format as "MMM dd, yyyy • HH:mm:ss"
+      return format(dateToFormat, 'MMM dd, yyyy • HH:mm:ss');
     } catch (error) {
-      console.error('Error formatting date:', error);
+      console.error('Error formatting date:', error, 'Input:', timestamp);
       return 'Invalid date';
     }
   };
@@ -200,10 +208,10 @@ export const ReasonsTable: React.FC<ReasonsTableProps> = ({
                     </Avatar>
                     <Box>
                       <Typography variant="body2" fontWeight="medium">
-                        {reason.user_name || 'User ' + reason.user_id}
+                        {reason.employee_name || 'User ' + reason.employee_id}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        ID: {reason.user_id}
+                        ID: {reason.employee_id}
                       </Typography>
                     </Box>
                   </Box>
@@ -248,7 +256,7 @@ export const ReasonsTable: React.FC<ReasonsTableProps> = ({
                       sx={{ color: theme.palette.text.secondary, opacity: 0.7 }}
                     />
                     <Typography variant="body2">
-                      {formatTimestamp(reason.timestamp)}
+                      {reason.exit_time ? formatTimestamp(reason.exit_time) : formatTimestamp(reason.timestamp)}
                     </Typography>
                   </Box>
                 </TableCell>
