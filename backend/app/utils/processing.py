@@ -195,26 +195,73 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                     
                     return result
         else:
-            # If there's already an exit time for today, just return the info
-            attendance_data = {
-                "action": "info",  # Changed to indicate this is just informational
+            # If there's already an exit time for today, update it with the latest detection
+            logger.info(f"Updating exit time for {employee_name} (ID: {employee.get('employee_id')}) with latest detection")
+            
+            # Process exit logic using the Attendance model method
+            is_early_exit, early_exit_message = attendance_model.check_early_exit(
+                employee.get("employee_id"), 
+                exit_time=current_time
+            )
+            
+            # Update the existing attendance record with the latest exit time
+            update("Attendance", existing_attendance.get("objectId"), {
+                "exit_time": {
+                    "__type": "Date",
+                    "iso": current_time.isoformat()
+                },
+                "is_early_exit": is_early_exit,
+                "early_exit_reason": early_exit_message if is_early_exit else None,
+                "early_exit_message": early_exit_message if is_early_exit else None,
+                "confidence": max(existing_attendance.get("confidence", 0), rounded_similarity),
+                "updated_at": {
+                    "__type": "Date",
+                    "iso": current_time.isoformat()
+                }
+            })
+            
+            # Prepare data for email notification (optional - you might want to disable this to avoid spam)
+            notification_data = {
+                "name": employee_name,
                 "employee_id": employee.get("employee_id"),
                 "employee_name": employee_name,
-                "name": employee_name,  # Explicitly include name for frontend
-                "timestamp": existing_attendance.get("timestamp", {}).get("iso"),
+                "timestamp": current_time.isoformat(),
                 "similarity": rounded_similarity,
+                "is_early_exit": is_early_exit,
+                "early_exit_message": early_exit_message,
+                "early_exit_reason": early_exit_message,
                 "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
-                "exit_time": existing_attendance.get("exit_time", {}).get("iso"),
+                "exit_time": current_time.isoformat(),
                 "objectId": existing_attendance.get("objectId")
             }
             
-            result["processed_employee"] = {
-                **attendance_data,
-                "message": "Attendance complete for today"
+            # Note: Commented out email notifications to avoid spam for continuous updates
+            # You can uncomment these if you want email notifications for every exit time update
+            # send_exit_notification(notification_data, employee.get("email"))
+            # if is_early_exit:
+            #     send_early_exit_notification(notification_data, employee.get("email"))
+
+            attendance_data = {
+                "action": "exit_update",  # New action type to indicate exit time update
+                "employee_id": employee.get("employee_id"),
+                "employee_name": employee_name,
+                "name": employee_name,  # Explicitly include name for frontend
+                "timestamp": current_time.isoformat(),
+                "similarity": rounded_similarity,
+                "is_early_exit": is_early_exit,
+                "early_exit_message": early_exit_message,
+                "early_exit_reason": early_exit_message,
+                "entry_time": existing_attendance.get("timestamp", {}).get("iso"),
+                "exit_time": current_time.isoformat(),
+                "objectId": existing_attendance.get("objectId")
             }
-            
-            # Don't set attendance_update since this is just an info check, not a change
-            # result["attendance_update"] = attendance_data
+
+            result["processed_employee"] = {
+                **attendance_data, 
+                "message": "Exit time updated successfully", 
+                "name": employee_name
+            }
+            result["attendance_update"] = attendance_data
             
             return result
 

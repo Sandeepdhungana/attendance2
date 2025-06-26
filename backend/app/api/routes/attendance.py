@@ -24,7 +24,7 @@ class ShiftUpdate(BaseModel):
     name: str
     login_time: str
     logout_time: str
-    grace_period: int = 0
+    grace_period: int = 30
 
 
 class EmployeeUpdate(BaseModel):

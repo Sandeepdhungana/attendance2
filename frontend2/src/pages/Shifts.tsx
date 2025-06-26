@@ -54,7 +54,7 @@ export default function Shifts() {
     name: '',
     login_time: '',
     logout_time: '',
-    grace_period: 15,
+    grace_period: 30,
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -155,7 +155,7 @@ export default function Shifts() {
         setSuccess('Shift created successfully');
         
         // Reset the form
-        setNewShift({ name: '', login_time: '', logout_time: '', grace_period: 15 });
+        setNewShift({ name: '', login_time: '', logout_time: '', grace_period: 30 });
         
         // Clear success message after 3 seconds
         setTimeout(() => setSuccess(null), 3000);

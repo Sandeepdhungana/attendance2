@@ -45,6 +45,7 @@ async def broadcast_attendance_update(attendance_data: Dict[str, Any]):
             continue
             
         # Skip updates with action "update" or "info" - these don't represent actual changes
+        # But allow "exit_update" as it represents a real exit time change
         if data.get("action") in ["update", "info"]:
             continue
             
@@ -411,6 +412,7 @@ def handle_future_completion(future, client_id):
         if attendance_updates:
             # Only broadcast attendance updates that represent actual changes
             # Specifically, filter out updates with action "update" or "info"
+            # But allow "exit_update" as it represents a real exit time change
             actionable_updates = [
                 update for update in attendance_updates 
                 if update.get("action") not in ["update", "info"]

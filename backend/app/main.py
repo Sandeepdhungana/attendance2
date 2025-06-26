@@ -106,19 +106,19 @@ def initialize_back4app():
                 "name": "Morning Shift",
                 "login_time": "09:00",
                 "logout_time": "18:00",
-                "grace_period": 10
+                "grace_period": 30
             },
             {
                 "name": "Evening Shift",
                 "login_time": "14:00",
                 "logout_time": "23:00",
-                "grace_period": 10
+                "grace_period": 30
             },
             {
                 "name": "Night Shift",
                 "login_time": "22:00",
                 "logout_time": "07:00",
-                "grace_period": 10
+                "grace_period": 30
             }
         ]
         for shift_data in default_shifts:

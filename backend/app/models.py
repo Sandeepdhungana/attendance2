@@ -241,7 +241,7 @@ class Attendance(BaseModel):
         
         Args:
             employee_id: The employee's ID
-            exit_time: Optional exit time to check. If not provided, will check if exit_time exists in attendance record
+            exit_time: Optional exit time to check. If not provided, will use exit_time from attendance record
             
         Returns:
             tuple[bool, str]: (is_early_exit, message)
@@ -282,11 +282,7 @@ class Attendance(BaseModel):
             
             attendance = attendance[0]
             
-            # If no exit time is provided and no exit time in record, mark as early exit
-            if not exit_time and not attendance.get("exit_time"):
-                return True, "No exit time given"
-            
-            # Get entry and exit times
+            # Get entry time
             entry_time = attendance.get("timestamp", {}).get("iso")
             if not entry_time:
                 return False, "No entry time found"
@@ -295,21 +291,26 @@ class Attendance(BaseModel):
             entry_datetime = datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
             entry_datetime = convert_to_local_time(entry_datetime)
             
-            # Get exit time (either provided or from record)
+            # Determine exit time to use
+            exit_datetime = None
             if exit_time:
+                # Use provided exit time
                 exit_datetime = convert_to_local_time(exit_time)
             else:
-                exit_time = attendance.get("exit_time", {}).get("iso")
-                if not exit_time:
-                    return True, "No exit time given"
-                exit_datetime = datetime.fromisoformat(exit_time.replace('Z', '+00:00'))
-                exit_datetime = convert_to_local_time(exit_datetime)
-            
-            # Calculate actual time spent (x)
-            time_spent = (exit_datetime - entry_datetime).total_seconds()
+                # Try to get exit time from attendance record
+                stored_exit_time = attendance.get("exit_time")
+                if stored_exit_time:
+                    if isinstance(stored_exit_time, dict) and stored_exit_time.get("iso"):
+                        exit_time_str = stored_exit_time.get("iso")
+                    else:
+                        exit_time_str = stored_exit_time
+                    exit_datetime = datetime.fromisoformat(exit_time_str.replace('Z', '+00:00'))
+                    exit_datetime = convert_to_local_time(exit_datetime)
+                else:
+                    # No exit time available - cannot determine early exit
+                    return False, "No exit time available to check"
             
             # Get shift timing
-            shift_start = None
             shift_end = None
             
             if shift_id and isinstance(shift_id, dict) and shift_id.get("objectId"):
@@ -321,26 +322,23 @@ class Attendance(BaseModel):
                         self._shift_cache[shift_object_id] = shift[0]
                 
                 shift = self._shift_cache.get(shift_object_id)
-                if shift and shift.get("login_time") and shift.get("logout_time"):
+                if shift and shift.get("logout_time"):
                     # Parse shift times
-                    login_time_str = shift.get("login_time")
                     logout_time_str = shift.get("logout_time")
                     
                     # Convert to datetime objects for the attendance date
-                    login_hours, login_minutes = map(int, login_time_str.split(":"))
                     logout_hours, logout_minutes = map(int, logout_time_str.split(":"))
                     
-                    # Create datetime objects for the attendance date
-                    shift_start = datetime.combine(entry_datetime.date(), 
-                                                 datetime.min.time().replace(hour=login_hours, 
-                                                                           minute=login_minutes))
+                    # Create shift end datetime (same day as entry)
                     shift_end = datetime.combine(entry_datetime.date(), 
                                                datetime.min.time().replace(hour=logout_hours, 
                                                                          minute=logout_minutes))
-                    
-                    # Make timezone-aware
-                    shift_start = convert_to_local_time(shift_start)
                     shift_end = convert_to_local_time(shift_end)
+                    
+                    # Handle overnight shifts: if shift end is before entry time, assume it's next day
+                    if shift_end < entry_datetime:
+                        shift_end += timedelta(days=1)
+                        
             else:
                 # Check office timing cache first
                 if self._office_timing_cache is None:
@@ -348,40 +346,39 @@ class Attendance(BaseModel):
                     if office_timings:
                         self._office_timing_cache = office_timings[0]
                 
-                if self._office_timing_cache and self._office_timing_cache.get("login_time") and self._office_timing_cache.get("logout_time"):
+                if self._office_timing_cache and self._office_timing_cache.get("logout_time"):
                     # Parse office times
-                    login_time_str = self._office_timing_cache.get("login_time")
                     logout_time_str = self._office_timing_cache.get("logout_time")
                     
                     # Convert to datetime objects for the attendance date
-                    login_hours, login_minutes = map(int, login_time_str.split(":"))
                     logout_hours, logout_minutes = map(int, logout_time_str.split(":"))
                     
-                    # Create datetime objects for the attendance date
-                    shift_start = datetime.combine(entry_datetime.date(), 
-                                                 datetime.min.time().replace(hour=login_hours, 
-                                                                           minute=login_minutes))
+                    # Create shift end datetime (same day as entry)
                     shift_end = datetime.combine(entry_datetime.date(), 
                                                datetime.min.time().replace(hour=logout_hours, 
                                                                          minute=logout_minutes))
-                    
-                    # Make timezone-aware
-                    shift_start = convert_to_local_time(shift_start)
                     shift_end = convert_to_local_time(shift_end)
+                    
+                    # Handle overnight shifts: if shift end is before entry time, assume it's next day
+                    if shift_end < entry_datetime:
+                        shift_end += timedelta(days=1)
             
-            if not shift_start or not shift_end:
-                return False, "No shift timing found"
+            if not shift_end:
+                return False, "No shift end time found"
             
-            # Calculate expected shift duration (y)
-            shift_duration = (shift_end - shift_start).total_seconds()
-            
-            # Check if early exit
-            is_early_exit = time_spent < shift_duration
+            # Check if early exit by comparing exit time directly with scheduled end time
+            # No grace period for exit - they should work until or after their scheduled end time
+            is_early_exit = exit_datetime < shift_end
             
             if is_early_exit:
                 # Calculate how early they left
-                early_minutes = int((shift_duration - time_spent) / 60)
-                return True, f"Left {early_minutes} minutes early"
+                early_seconds = (shift_end - exit_datetime).total_seconds()
+                early_minutes = int(early_seconds / 60)
+                if early_minutes > 0:
+                    return True, f"Left {early_minutes} minutes early (scheduled end: {shift_end.strftime('%H:%M')})"
+                else:
+                    # Less than a minute early
+                    return True, f"Left slightly early (scheduled end: {shift_end.strftime('%H:%M')})"
             
             return False, "Not an early exit"
             

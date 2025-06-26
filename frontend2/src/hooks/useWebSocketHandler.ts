@@ -96,6 +96,7 @@ export const useWebSocketHandler = () => {
             
             const entry_type = update.action === 'delete' ? 'exit' : 
                              update.action === 'early_exit_reason' ? 'exit' : 
+                             update.action === 'exit_update' ? 'exit' :
                              update.action;
             
             // Normalize employee_id/user_id fields
@@ -150,62 +151,9 @@ export const useWebSocketHandler = () => {
             // Add to our local collection
             newAttendances.push(attendanceUpdate);
 
-            if (update.action === 'exit' && update.is_early_exit) {
-              console.log("Early exit detected, update data:", update);
-              
-              // Use employee_id directly from the update
-              const employeeId = update.employee_id || update.user_id || '';
-              
-              if (!employeeId) {
-                console.error("Missing employee_id for early exit dialog");
-                return;
-              }
-              
-              // Find the ACTUAL attendance objectId - this is critical
-              // It should be the ID of the attendance record, not the employee ID
-              let attendanceId = null;
-              
-              // First priority: Use the actual objectId of the attendance record
-              if (update.objectId) {
-                attendanceId = update.objectId.toString();
-                console.log(`Using objectId for attendance ID: ${attendanceId}`);
-              } 
-              // Second priority: Use attendance_id field if available 
-              else if (update.attendance_id && update.attendance_id !== employeeId) {
-                attendanceId = update.attendance_id.toString();
-                console.log(`Using attendance_id field: ${attendanceId}`);
-              }
-              // Last resort: Use synthetic ID (but log a warning)
-              else {
-                console.warn("Could not find a valid attendance objectId - early exit reason submission may fail!");
-                if (attendanceId === employeeId) {
-                  console.error("Attendance ID incorrectly set to employee ID!");
-                }
-              }
-              
-              console.log("Setting early exit dialog with employee ID:", employeeId, "and attendance ID:", attendanceId);
-              
-              // Only open the dialog if we have a valid attendance objectId
-              if (attendanceId) {
-                setEarlyExitDialog({
-                  open: true,
-                  reason: {
-                    id: attendanceId, // The ID of this reason record
-                    user_id: employeeId, // The employee ID
-                    user_name: update.name || "Unknown",
-                    attendance_id: attendanceId, // The attendance objectId
-                    name: update.name || "Unknown",
-                    timestamp: update.timestamp || new Date().toISOString(),
-                    reason: update.reason || ''
-                  },
-                });
-              } else {
-                console.error("Cannot open early exit dialog - missing valid attendance objectId");
-                setMessage({
-                  type: 'error',
-                  text: 'Unable to submit early exit reason - system error. Please contact admin.',
-                });
-              }
+            // Early exit dialog disabled - just log for debugging
+            if (update.is_early_exit) {
+              console.log("Early exit detected but dialog disabled:", update);
             }
 
             if (update.action === 'early_exit_reason') {
@@ -232,10 +180,9 @@ export const useWebSocketHandler = () => {
                             
               setEarlyExitReasons(prev => [{
                 id: reasonId, // This is the ID of the early exit reason record
-                user_id: employeeId,
-                user_name: update.name || "Unknown",
+                employee_id: employeeId,
+                employee_name: update.name || "Unknown",
                 attendance_id: attendanceId,
-                name: update.name || "Unknown",
                 timestamp: update.timestamp || new Date().toISOString(),
                 reason: update.reason || ''
               }, ...prev]);
