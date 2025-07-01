@@ -673,12 +673,27 @@ async def websocket_endpoint(websocket: WebSocket):
                             # Use the face recognition object directly
                             face_recognition = get_face_recognition()
 
-                            # Get face embeddings
-                            face_embeddings = face_recognition.get_embeddings(
-                                img)
+                            # Get face embeddings with liveness detection
+                            face_embeddings, liveness_info = face_recognition.get_embeddings_with_liveness(img)
+                            
+                            # Check if liveness detection failed
+                            if not liveness_info.get("liveness_passed", False):
+                                await websocket.send_json({
+                                    "status": "anti_spoofing_failed",
+                                    "message": liveness_info.get("message", "Potential spoofing attempt detected"),
+                                    "liveness_info": liveness_info
+                                })
+
+                                # Decrement the counter for pending tasks
+                                with client_pending_tasks_lock:
+                                    client_pending_tasks[client_id] -= 1
+
+                                continue
+                            
                             if not face_embeddings:
                                 await websocket.send_json({
-                                    "status": "no_face_detected"
+                                    "status": "no_face_detected",
+                                    "liveness_info": liveness_info
                                 })
 
                                 # Decrement the counter for pending tasks

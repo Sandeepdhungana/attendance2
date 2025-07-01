@@ -232,6 +232,23 @@ async def process_websocket_responses():
                     websocket_responses_queue.task_done()
                     continue
 
+                # Check if this is an anti-spoofing failure
+                if item.get("status") == "anti_spoofing_failed":
+                    success = await _send_message_to_client(
+                        websocket,
+                        {
+                            "status": "anti_spoofing_failed",
+                            "message": item.get("message", "Potential spoofing attempt detected"),
+                            "liveness_info": item.get("liveness_info", {}),
+                            "is_streaming": item.get("is_streaming", False)
+                        },
+                        client_id
+                    )
+                    if not success and client_id in active_connections:
+                        del active_connections[client_id]
+                    websocket_responses_queue.task_done()
+                    continue
+
                 # Process the results
                 processed_users = item["processed_users"]
                 attendance_updates = item["attendance_updates"]
@@ -292,6 +309,35 @@ def handle_future_completion(future, client_id):
     
     try:
         processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
+        
+        # Handle anti-spoofing failure (error code 3)
+        if no_face_count == 3:
+            # Anti-spoofing failed
+            error_message = last_recognized_users.get("message", "Potential spoofing attempt detected")
+            liveness_info = last_recognized_users.get("liveness_info", {})
+            
+            logger.warning(f"Anti-spoofing failed for client {client_id}: {error_message}")
+            
+            # Send anti-spoofing failure notification
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "status": "anti_spoofing_failed",
+                "message": error_message,
+                "liveness_info": liveness_info,
+                "processed_users": [],
+                "attendance_updates": [],
+                "no_face_count": 3
+            })
+            
+            # Also send notification
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "type": "notification",
+                "notification_type": "error",
+                "message": f"Security Alert: {error_message}"
+            })
+            
+            return
         
         # Create real-time detection notifications to send via the response queue
         real_time_notifications = []

@@ -4,6 +4,10 @@ import json
 import logging
 import concurrent.futures
 from typing import List, Dict, Any, Tuple
+import cv2
+from deepface import DeepFace
+import tempfile
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -18,10 +22,179 @@ class FaceRecognition:
             self.threshold = 0.5 # Cosine similarity threshold for matching
             # Create a thread pool for parallel processing
             self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-            logger.info("FaceRecognition initialized successfully")
+            
+            # Anti-spoofing configuration
+            self.anti_spoofing_enabled = True
+            self.liveness_threshold = 0.7  # Threshold for liveness detection
+            
+            logger.info("FaceRecognition initialized successfully with anti-spoofing")
         except Exception as e:
             logger.error(f"Error initializing FaceRecognition: {str(e)}")
             raise
+
+    def check_liveness(self, image):
+        """
+        Check if the face in the image is real (liveness detection) using DeepFace
+        Returns: (is_real: bool, confidence: float, details: dict)
+        """
+        if not self.anti_spoofing_enabled:
+            return True, 1.0, {"message": "Anti-spoofing disabled"}
+            
+        try:
+            # Create a temporary file to save the image for DeepFace processing
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                temp_path = temp_file.name
+                
+            # Save image to temporary file
+            cv2.imwrite(temp_path, image)
+            
+            try:
+                # Use DeepFace's anti-spoofing functionality
+                result = DeepFace.extract_faces(
+                    img_path=temp_path,
+                    anti_spoofing=True,
+                    detector_backend='opencv'
+                )
+
+                # logger.info(f"Liveness check result: {result}")
+                
+                if result and len(result) > 0:
+                    # Get the first face result
+                    face_result = result[0]
+                    
+                    # Check if anti-spoofing information is available
+                    if hasattr(face_result, 'is_real'):
+
+                        confidence = 0.8 if face_result.get('is_real') else 0.2
+                        logger.info(f"Liveness check completed - treating as real face ")
+                        
+                        return face_result.get('is_real'), confidence, {
+                            "message": "Liveness check completed",
+                            "faces_detected": len(result)
+                        }
+                    
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                    
+        except Exception as e:
+            logger.error(f"Error in liveness detection: {str(e)}")
+            # Fall back to basic image quality checks
+            return self._basic_liveness_check(image)
+
+    def _basic_liveness_check(self, image):
+        """
+        Basic liveness checks using image analysis
+        This is a fallback when DeepFace anti-spoofing is not available
+        """
+        try:
+            # Convert to grayscale for analysis
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            
+            # Check image quality metrics
+            # 1. Variance of Laplacian (blur detection)
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            
+            # 2. Image brightness and contrast
+            mean_brightness = np.mean(gray)
+            brightness_std = np.std(gray)
+            
+            # 3. Image size check
+            height, width = gray.shape
+            
+            # Basic quality thresholds
+            blur_threshold = 100  # Higher values indicate less blur
+            brightness_min = 30   # Too dark
+            brightness_max = 220  # Too bright
+            contrast_min = 15     # Too low contrast
+            size_min = 100        # Too small image
+            
+            issues = []
+            confidence = 1.0
+            
+            if laplacian_var < blur_threshold:
+                issues.append("Image appears blurry")
+                confidence -= 0.3
+                
+            if mean_brightness < brightness_min:
+                issues.append("Image too dark")
+                confidence -= 0.2
+                
+            if mean_brightness > brightness_max:
+                issues.append("Image too bright")
+                confidence -= 0.2
+                
+            if brightness_std < contrast_min:
+                issues.append("Low contrast")
+                confidence -= 0.2
+                
+            if min(height, width) < size_min:
+                issues.append("Image too small")
+                confidence -= 0.3
+                
+            confidence = max(confidence, 0.0)
+            is_real = confidence >= 0.5
+            
+            details = {
+                "method": "basic_quality_check",
+                "laplacian_variance": float(laplacian_var),
+                "brightness": float(mean_brightness),
+                "contrast": float(brightness_std),
+                "image_size": f"{width}x{height}",
+                "issues": issues
+            }
+            
+            logger.info(f"Basic liveness check: is_real={is_real}, confidence={confidence:.2f}")
+            return is_real, confidence, details
+            
+        except Exception as e:
+            logger.error(f"Error in basic liveness check: {str(e)}")
+            return True, 0.5, {"message": "Liveness check failed, defaulting to real"}
+
+    def get_embeddings_with_liveness(self, image):
+        """Extract face embeddings with liveness detection"""
+        try:
+            # First check liveness
+            is_real, liveness_confidence, liveness_details = self.check_liveness(image)
+            
+            if not is_real or liveness_confidence < self.liveness_threshold:
+                logger.warning(f"Liveness check failed: confidence={liveness_confidence:.2f}, details={liveness_details}")
+                return [], {
+                    "liveness_passed": False,
+                    "liveness_confidence": liveness_confidence,
+                    "liveness_details": liveness_details,
+                    "message": "Potential spoofing attempt detected"
+                }
+            
+            # If liveness check passes, proceed with face detection
+            logger.info("Detecting faces in image after liveness check")
+            faces = self.app.get(image)
+            if not faces:
+                logger.warning("No faces detected in image")
+                return [], {
+                    "liveness_passed": True,
+                    "liveness_confidence": liveness_confidence,
+                    "liveness_details": liveness_details,
+                    "message": "No faces detected"
+                }
+            
+            logger.info(f"Found {len(faces)} faces with liveness check passed")
+            # Return face embeddings with liveness info
+            return [face.embedding for face in faces], {
+                "liveness_passed": True,
+                "liveness_confidence": liveness_confidence,
+                "liveness_details": liveness_details,
+                "faces_detected": len(faces)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error extracting face embeddings with liveness: {str(e)}")
+            return [], {
+                "liveness_passed": False,
+                "error": str(e),
+                "message": "Error in face detection with liveness check"
+            }
 
     def get_embeddings(self, image):
         """Extract face embeddings from image for all detected faces"""
@@ -46,6 +219,14 @@ class FaceRecognition:
             return None
         logger.info(f"Found {len(embeddings)} faces, using the first one")
         return embeddings[0]  # Return just the embedding of the first face
+
+    def get_embedding_with_liveness(self, image):
+        """Extract single face embedding with liveness detection (legacy compatibility)"""
+        embeddings, liveness_info = self.get_embeddings_with_liveness(image)
+        if not embeddings:
+            return None, liveness_info
+        logger.info(f"Found {len(embeddings)} faces with liveness check, using the first one")
+        return embeddings[0], liveness_info
 
     def compare_faces(self, embedding1, embedding2):
         """Compare two face embeddings using cosine similarity"""
@@ -130,6 +311,29 @@ class FaceRecognition:
                 })
                 
         return matches
+
+    def find_matches_for_embeddings_with_liveness(self, query_embeddings: List[np.ndarray], users: List[Any], liveness_info: Dict, threshold: float = None) -> Tuple[List[Dict[str, Any]], Dict]:
+        """Find matches for multiple face embeddings with liveness information"""
+        if not liveness_info.get("liveness_passed", False):
+            return [], liveness_info
+            
+        matches = self.find_matches_for_embeddings(query_embeddings, users, threshold)
+        
+        # Add liveness information to matches
+        for match in matches:
+            match["liveness_info"] = liveness_info
+            
+        return matches, liveness_info
+
+    def set_anti_spoofing_enabled(self, enabled: bool):
+        """Enable or disable anti-spoofing"""
+        self.anti_spoofing_enabled = enabled
+        logger.info(f"Anti-spoofing {'enabled' if enabled else 'disabled'}")
+
+    def set_liveness_threshold(self, threshold: float):
+        """Set the liveness detection threshold"""
+        self.liveness_threshold = max(0.0, min(1.0, threshold))
+        logger.info(f"Liveness threshold set to {self.liveness_threshold}")
 
     def __del__(self):
         """Clean up thread pool when object is destroyed"""

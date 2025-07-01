@@ -403,13 +403,31 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
             img = cv2.resize(img, (new_w, new_h))
             logger.info(f"Resized image to {new_w}x{new_h}")
 
-        # Get all face embeddings from the image
+        # Get all face embeddings from the image with liveness detection
         try:
             face_recognition = get_face_recognition()
-            face_embeddings = face_recognition.get_embeddings(img)
+            face_embeddings, liveness_info = face_recognition.get_embeddings_with_liveness(img)
+            
+            # Check if liveness detection failed
+            if not liveness_info.get("liveness_passed", False):
+                logger.warning(f"Anti-spoofing failed for client {client_id}: {liveness_info.get('message', 'Unknown reason')}")
+                
+                # Return error code 3 to indicate spoofing attempt
+                return [], [], {
+                    "anti_spoofing_failed": True,
+                    "liveness_info": liveness_info,
+                    "message": liveness_info.get("message", "Potential spoofing attempt detected")
+                }, 3
+            
             if not face_embeddings:
                 logger.info(f"No faces detected in image from client {client_id}")
-                return [], [], {}, 1  # Return early if no faces found
+                return [], [], {
+                    "liveness_info": liveness_info,
+                    "message": "No faces detected"
+                }, 1  # Return early if no faces found
+            
+            logger.info(f"Liveness check passed for client {client_id}: confidence={liveness_info.get('liveness_confidence', 0):.2f}")
+            
         except MemoryError as me:
             logger.error(f"Memory error during face detection for client {client_id}: {str(me)}")
             return [], [], {}, 2
@@ -475,6 +493,11 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
                         processed_employee["detection_time"] = current_time.isoformat()
                         processed_employee["is_streaming"] = True
                         
+                        # Add liveness information
+                        processed_employee["liveness_info"] = liveness_info
+                        processed_employee["liveness_confidence"] = liveness_info.get('liveness_confidence', 0)
+                        processed_employee["anti_spoofing_passed"] = liveness_info.get('liveness_passed', False)
+                        
                         # Log processed employee for debugging
                         logger.debug(f"Processed employee for client {client_id}: {processed_employee}")
                         
@@ -488,6 +511,11 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
                         # Ensure employee name is present in attendance update too
                         if not result["attendance_update"].get('name') and employee.get('name'):
                             result["attendance_update"]["name"] = employee.get('name')
+                        
+                        # Add liveness information
+                        result["attendance_update"]["liveness_info"] = liveness_info
+                        result["attendance_update"]["liveness_confidence"] = liveness_info.get('liveness_confidence', 0)
+                        result["attendance_update"]["anti_spoofing_passed"] = liveness_info.get('liveness_passed', False)
                             
                         attendance_updates.append(result["attendance_update"])
                 except Exception as e:

@@ -9,3 +9,5 @@ opencv-python==4.5.3.56
 numpy==1.24.3
 insightface==0.7.3
 onnxruntime==1.8.1
+deepface==0.0.79
+tensorflow==2.13.0

@@ -122,8 +122,17 @@ async def mark_attendance(
         # Get face recognition instance
         face_recognition = get_face_recognition()
 
-        # Get all face embeddings from the image
-        face_embeddings = face_recognition.get_embeddings(img)
+        # Get all face embeddings from the image with liveness detection
+        face_embeddings, liveness_info = face_recognition.get_embeddings_with_liveness(img)
+        
+        # Check if liveness detection failed
+        if not liveness_info.get("liveness_passed", False):
+            logger.warning(f"Anti-spoofing failed during attendance marking: {liveness_info.get('message', 'Unknown reason')}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Security verification failed: {liveness_info.get('message', 'Potential spoofing attempt detected')}. Please try again with a live photo."
+            )
+        
         if not face_embeddings:
             raise HTTPException(
                 status_code=400, detail="No face detected in image")
@@ -361,9 +370,18 @@ async def register_employee(
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # Get face embedding
+        # Get face embedding with liveness detection
         face_recognition = get_face_recognition()
-        embedding = face_recognition.get_embedding(img)
+        embedding, liveness_info = face_recognition.get_embedding_with_liveness(img)
+        
+        # Check if liveness detection failed
+        if not liveness_info.get("liveness_passed", False):
+            logger.warning(f"Anti-spoofing failed during registration for employee {employee_id}: {liveness_info.get('message', 'Unknown reason')}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Security verification failed: {liveness_info.get('message', 'Potential spoofing attempt detected')}. Please try again with a live photo."
+            )
+        
         if embedding is None:
             raise HTTPException(
                 status_code=400, detail="No face detected in image")
@@ -577,3 +595,53 @@ def get_attendance_by_date(date: str):
     except Exception as e:
         logger.error(f"Error fetching attendance by date: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch attendance records: {str(e)}")
+
+
+@router.get("/anti-spoofing/config")
+def get_anti_spoofing_config():
+    """Get current anti-spoofing configuration"""
+    try:
+        face_recognition = get_face_recognition()
+        return {
+            "enabled": face_recognition.anti_spoofing_enabled,
+            "liveness_threshold": face_recognition.liveness_threshold
+        }
+    except Exception as e:
+        logger.error(f"Error getting anti-spoofing config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/anti-spoofing/config")
+def update_anti_spoofing_config(
+    enabled: bool = Form(...),
+    liveness_threshold: float = Form(...)
+):
+    """Update anti-spoofing configuration"""
+    try:
+        face_recognition = get_face_recognition()
+        
+        # Validate threshold
+        if not (0.0 <= liveness_threshold <= 1.0):
+            raise HTTPException(
+                status_code=400, 
+                detail="Liveness threshold must be between 0.0 and 1.0"
+            )
+        
+        # Update configuration
+        face_recognition.set_anti_spoofing_enabled(enabled)
+        face_recognition.set_liveness_threshold(liveness_threshold)
+        
+        logger.info(f"Anti-spoofing configuration updated: enabled={enabled}, threshold={liveness_threshold}")
+        
+        return {
+            "message": "Anti-spoofing configuration updated successfully",
+            "config": {
+                "enabled": enabled,
+                "liveness_threshold": liveness_threshold
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating anti-spoofing config: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
