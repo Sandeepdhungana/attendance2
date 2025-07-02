@@ -19,8 +19,7 @@ class FaceRecognition:
             logger.info("Initializing FaceRecognition with buffalo_l model")
             self.app = FaceAnalysis(name='buffalo_l')
             self.app.prepare(ctx_id=0, det_size=(640, 640))
-            self.threshold = 0.5 # Cosine similarity threshold for matching
-            # Create a thread pool for parallel processing
+            self.threshold = 0.5 
             self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
             
             # Anti-spoofing configuration
