@@ -75,8 +75,6 @@ class FaceRecognition:
                 if result and len(result) > 0:
                     # Get the first face result
                     face_result = result[0]
-                    logger.info(f"Liveness check result: {result}")
-                    logger.info(f"Liveness check result: {face_result}")
                     
                     # Check if anti-spoofing information is available (face_result is a dictionary)
                     if 'is_real' in face_result and 'antispoof_score' in face_result:
