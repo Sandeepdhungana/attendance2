@@ -77,13 +77,42 @@ export default function Attendance() {
             'Content-Type': 'multipart/form-data',
           },
         });
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to mark attendance:', error);
+        
+        // Handle specific anti-spoofing errors
+        if (error.response?.status === 400) {
+          const errorMessage = error.response?.data?.detail || '';
+          if (errorMessage.includes('Security verification failed') || 
+              errorMessage.includes('spoofing') || 
+              errorMessage.includes('anti-spoofing')) {
+            // Show anti-spoofing specific message
+            sendMessage({
+              type: 'notification',
+              notification_type: 'error',
+              message: 'Show your real face'
+            });
+          } else {
+            // Show other 400 errors as they are
+            sendMessage({
+              type: 'notification', 
+              notification_type: 'error',
+              message: errorMessage || 'Failed to mark attendance'
+            });
+          }
+        } else {
+          // Handle other errors
+          sendMessage({
+            type: 'notification',
+            notification_type: 'error', 
+            message: 'Failed to mark attendance. Please try again.'
+          });
+        }
       } finally {
         setIsCapturing(false);
       }
     }
-  }, [webcamRef]);
+  }, [webcamRef, sendMessage]);
 
   const handleStartStreaming = useCallback(() => {
     if (webcamRef.current) {

@@ -40,42 +40,86 @@ class FaceRecognition:
             return True, 1.0, {"message": "Anti-spoofing disabled"}
             
         try:
+            # Validate input image
+            if image is None or image.size == 0:
+                logger.warning("Invalid or empty image provided, falling back to basic check")
+                return self._basic_liveness_check(image) if image is not None else (False, 0.0, {"message": "Invalid image"})
+            
             # Create a temporary file to save the image for DeepFace processing
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
                 temp_path = temp_file.name
                 
-            # Save image to temporary file
-            cv2.imwrite(temp_path, image)
+            # Save image to temporary file with error handling
+            try:
+                success = cv2.imwrite(temp_path, image)
+                if not success:
+                    logger.warning("Failed to save image to temporary file, falling back to basic check")
+                    return self._basic_liveness_check(image)
+            except Exception as img_save_error:
+                logger.warning(f"Error saving image: {str(img_save_error)}, falling back to basic check")
+                return self._basic_liveness_check(image)
             
             try:
                 # Use DeepFace's anti-spoofing functionality
                 result = DeepFace.extract_faces(
                     img_path=temp_path,
                     anti_spoofing=True,
-                    detector_backend='opencv'
+                    detector_backend='opencv',
+                    enforce_detection=False
                 )
+
+                
 
                 # logger.info(f"Liveness check result: {result}")
                 
                 if result and len(result) > 0:
                     # Get the first face result
                     face_result = result[0]
+                    logger.info(f"Liveness check result: {result}")
+                    logger.info(f"Liveness check result: {face_result}")
                     
-                    # Check if anti-spoofing information is available
-                    if hasattr(face_result, 'is_real'):
-
-                        confidence = 0.8 if face_result.get('is_real') else 0.2
-                        logger.info(f"Liveness check completed - treating as real face ")
+                    # Check if anti-spoofing information is available (face_result is a dictionary)
+                    if 'is_real' in face_result and 'antispoof_score' in face_result:
+                        is_real = face_result['is_real']
+                        # Use the actual antispoof_score from DeepFace as confidence
+                        antispoof_score = float(face_result['antispoof_score'])
                         
-                        return face_result.get('is_real'), confidence, {
+                        logger.info(f"Liveness check completed - is_real: {is_real}, antispoof_score: {antispoof_score:.3f}")
+                        
+                        return is_real, antispoof_score, {
                             "message": "Liveness check completed",
-                            "faces_detected": len(result)
+                            "faces_detected": len(result),
+                            "antispoof_score": antispoof_score,
+                            "face_confidence": float(face_result.get('confidence', 0))
                         }
+                    elif 'is_real' in face_result:
+                        # Fallback if only is_real is available
+                        is_real = face_result['is_real']
+                        confidence = 0.8 if is_real else 0.2
+                        
+                        logger.info(f"Liveness check completed (no antispoof_score) - is_real: {is_real}, confidence: {confidence}")
+                        
+                        return is_real, confidence, {
+                            "message": "Liveness check completed (basic)",
+                            "faces_detected": len(result),
+                            "face_confidence": float(face_result.get('confidence', 0))
+                        }
+                    else:
+                        # If no anti-spoofing information available, fall back to basic check
+                        logger.info("No anti-spoofing information available in DeepFace result, falling back to basic check")
+                        return self._basic_liveness_check(image)
+                else:
+                    # No faces detected in DeepFace result, fall back to basic check
+                    logger.info("No faces detected in DeepFace result, falling back to basic check")
+                    return self._basic_liveness_check(image)
                     
             finally:
                 # Clean up temporary file
                 if os.path.exists(temp_path):
-                    os.unlink(temp_path)
+                    try:
+                        os.unlink(temp_path)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to clean up temporary file {temp_path}: {str(cleanup_error)}")
                     
         except Exception as e:
             logger.error(f"Error in liveness detection: {str(e)}")
@@ -155,7 +199,14 @@ class FaceRecognition:
         """Extract face embeddings with liveness detection"""
         try:
             # First check liveness
-            is_real, liveness_confidence, liveness_details = self.check_liveness(image)
+            liveness_result = self.check_liveness(image)
+            
+            # Ensure we got a valid tuple result from check_liveness
+            if liveness_result is None or len(liveness_result) != 3:
+                logger.error("check_liveness returned invalid result, falling back to basic check")
+                liveness_result = self._basic_liveness_check(image)
+            
+            is_real, liveness_confidence, liveness_details = liveness_result
             
             if not is_real or liveness_confidence < self.liveness_threshold:
                 logger.warning(f"Liveness check failed: confidence={liveness_confidence:.2f}, details={liveness_details}")

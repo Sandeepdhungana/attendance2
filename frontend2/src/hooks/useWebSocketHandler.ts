@@ -266,6 +266,14 @@ export const useWebSocketHandler = () => {
           text: 'No matching users found',
         });
       }
+      else if (data.status === 'anti_spoofing_failed') {
+        setFaceCount(0);
+        setMultipleUsers([]);
+        setMessage({
+          type: 'error',
+          text: 'Show your real face',
+        });
+      }
       else if (data.status === 'error') {
         setMessage({
           type: 'error',
