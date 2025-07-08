@@ -1,7 +1,7 @@
 from . import create_app
 from .api import router as api_router
 from .api.routes import attendance, employees, timezone, websocket, early_exit
-from .utils.websocket import process_websocket_responses
+from .utils.websocket import process_websocket_responses, process_queue
 from .dependencies import process_pool
 from .database import query, create, create_class_schema
 from .utils.time_utils import get_local_time
@@ -128,6 +128,7 @@ async def lifespan(app):
     # initialize_back4app()
     # Start the WebSocket response processing tasks
     asyncio.create_task(process_websocket_responses())
+    asyncio.create_task(process_queue())
     logger.info("Application startup completed")
     
     yield
