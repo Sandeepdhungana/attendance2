@@ -330,11 +330,10 @@ export const useWebSocketHandler = () => {
         });
       }
       else if (data.status === 'queued') {
-        // Image is queued - show as warning to indicate backlog
-        console.log('⏳ Processing queue is full, image queued');
+        // Image is queued
         setMessage({
-          type: 'error', // Changed from 'success' to 'error' to indicate backlog
-          text: data.message || 'Processing queue full, please wait...',
+          type: 'success',
+          text: data.message || 'Image queued for processing',
         });
       }
       else if (data.status === 'no_face_detected') {

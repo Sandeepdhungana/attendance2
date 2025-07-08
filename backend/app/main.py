@@ -9,14 +9,6 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from app.models import Employee, Attendance, OfficeTiming, Shift, TimezoneConfig
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from .config import settings
-from .utils.websocket import handle_websocket
-
-# Configure logging to reduce uvicorn WebSocket noise
-logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +120,10 @@ def initialize_back4app():
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app):
     """Manage application lifespan events"""
     # Startup
-    print("🚀 FastAPI application starting up...")
+    logger.info("Starting up application...")
     # this is always commented out
     # initialize_back4app()
     # Start the WebSocket response processing tasks
@@ -141,7 +133,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    print("🛑 FastAPI application shutting down...")
+    logger.info("Shutting down application...")
     process_pool.shutdown()
     logger.info("Application shutdown completed")
 
