@@ -3,13 +3,14 @@ from typing import Optional
 from app.services.employee import get_employees, delete_employee
 from app.dependencies import get_face_recognition
 from app.utils.time_utils import get_local_time
-from app.dependencies import get_queues
+from app.utils.websocket import broadcast_attendance_update
 from app.models import Employee
 from app.services.send_email import send_welcome_email
 from app.database import query as db_query
 from pydantic import BaseModel
 import cv2
 import numpy as np
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -176,18 +177,16 @@ def delete_employee_route(employee_id: str):
             if len(parts) > 1:
                 broadcast_id = parts[1].split(" ")[0]
         
-        # Broadcast user deletion
+        # Broadcast user deletion immediately
         attendance_update = {
             "action": "delete_user",
             "user_id": broadcast_id,
             "object_id": result.get("object_id", ""),
             "timestamp": get_local_time().isoformat()
         }
-        processing_results_queue, _ = get_queues()
-        processing_results_queue.put({
-            "type": "attendance_update",
-            "data": [attendance_update]
-        })
+        
+        # Use asyncio.run to call the async broadcast function from sync context
+        asyncio.run(broadcast_attendance_update([attendance_update]))
         
         return result
     except Exception as e:
@@ -283,18 +282,15 @@ async def register_employee(
             
         new_employee = employee_model.create(employee_data)
 
-        # Broadcast user registration
+        # Broadcast user registration immediately
         attendance_update = {
             "action": "register_user",
             "user_id": employee_id,
             "name": name,
             "timestamp": get_local_time().isoformat()
         }
-        processing_results_queue, _ = get_queues()
-        processing_results_queue.put({
-            "type": "attendance_update",
-            "data": [attendance_update]
-        })
+        
+        await broadcast_attendance_update([attendance_update])
         
         # Send welcome email to the new employee if email is provided
         if email:
@@ -434,11 +430,8 @@ async def update_employee_profile(
             "name": name,
             "timestamp": current_time.isoformat()
         }
-        processing_results_queue, _ = get_queues()
-        processing_results_queue.put({
-            "type": "attendance_update",
-            "data": [attendance_update]
-        })
+        
+        await broadcast_attendance_update([attendance_update])
         
         logger.info(f"Employee profile updated successfully: {employee_id} ({name})")
         return {

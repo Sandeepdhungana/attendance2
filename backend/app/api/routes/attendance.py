@@ -1,9 +1,10 @@
+import asyncio
 from fastapi import APIRouter,  HTTPException, File, UploadFile, Form
 from typing import List, Dict, Any, Optional
 from app.database import query, delete
 from app.services.attendance import get_attendance_records, get_employee_shift_info
 from app.utils.processing import process_attendance_for_employee
-from app.dependencies import get_queues, get_face_recognition
+from app.dependencies import get_face_recognition
 from app.utils.websocket import broadcast_attendance_update
 from app.utils.time_utils import get_local_time
 from app.services.send_email import send_welcome_email
@@ -52,7 +53,7 @@ def get_attendance():
 
 
 @router.delete("/attendance/{attendance_id}")
-def delete_attendance(attendance_id: str):
+async def delete_attendance(attendance_id: str):
     """Delete an attendance record"""
     try:
         logger.info(
@@ -93,12 +94,8 @@ def delete_attendance(attendance_id: str):
             "timestamp": get_local_time().isoformat()
         }
 
-        # Add the update to the processing results queue for broadcasting to all clients
-        processing_results_queue, websocket_responses_queue = get_queues()
-        processing_results_queue.put({
-            "type": "attendance_update",
-            "data": [attendance_update]
-        })
+        # Broadcast immediately instead of queueing
+        await broadcast_attendance_update([attendance_update])
 
         return {"message": "Attendance record deleted successfully"}
     except Exception as e:
@@ -184,7 +181,7 @@ async def mark_attendance(
 
 
 @router.delete("/early-exit-reasons/{reason_id}")
-def delete_early_exit_reason(reason_id: str):
+async def delete_early_exit_reason(reason_id: str):
     """Delete an early exit reason"""
     try:
         # Get the early exit reason
@@ -216,12 +213,8 @@ def delete_early_exit_reason(reason_id: str):
             "timestamp": get_local_time().isoformat()
         }
 
-        # Add the update to the processing results queue
-        processing_results_queue, _ = get_queues()
-        processing_results_queue.put({
-            "type": "attendance_update",
-            "data": [update]
-        })
+        # Broadcast immediately instead of queueing
+        await broadcast_attendance_update([update])
 
         logger.info(f"Early exit reason deleted successfully: ID {reason_id}")
         return {"message": "Early exit reason deleted successfully"}
@@ -443,18 +436,15 @@ async def register_employee(
 
         new_employee = Employee().create(employee_data)
 
-        # Broadcast user registration
+        # Broadcast user registration immediately
         attendance_update = {
             "action": "register_user",
             "user_id": employee_id,
             "name": name,
             "timestamp": get_local_time().isoformat()
         }
-        processing_results_queue, _ = get_queues()
-        processing_results_queue.put({
-            "type": "attendance_update",
-            "data": [attendance_update]
-        })
+        
+        await broadcast_attendance_update([attendance_update])
 
         # Send welcome email to the new employee if email is provided
         if email:

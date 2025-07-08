@@ -466,11 +466,9 @@ def handle_future_completion(future, client_id):
             ]
             
             if actionable_updates:
-                processing_results_queue.put({
-                    "type": "attendance_update",
-                    "data": actionable_updates
-                })
-                logger.info(f"Queued {len(actionable_updates)} actionable attendance updates for broadcasting")
+                # Broadcast immediately instead of queueing
+                asyncio.run(broadcast_attendance_update(actionable_updates))
+                logger.info(f"Broadcast {len(actionable_updates)} actionable attendance updates immediately")
             else:
                 logger.info(f"No actionable attendance updates to broadcast")
             
