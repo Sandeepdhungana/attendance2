@@ -611,7 +611,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Handle streaming images - these need faster processing with less overhead
                 # Check if client has too many pending tasks
                 with client_pending_tasks_lock:
-                    if client_pending_tasks[client_id] >= MAX_CONCURRENT_TASKS_PER_CLIENT:
+                    current_count = client_pending_tasks[client_id]
+                    if current_count >= MAX_CONCURRENT_TASKS_PER_CLIENT:
+                        logger.warning(f"🚫 Client {client_id} queue full: {current_count}/{MAX_CONCURRENT_TASKS_PER_CLIENT} tasks pending")
                         await websocket.send_json({
                             "status": "queued",
                             "message": f"Processing queue full. Please wait.",
@@ -621,6 +623,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     # Increment the counter for pending tasks
                     client_pending_tasks[client_id] += 1
+                    logger.info(f"📈 Client {client_id} task queued: {current_count} -> {client_pending_tasks[client_id]} pending tasks")
 
                 try:
                     # Send confirmation that we received the image and are processing it
