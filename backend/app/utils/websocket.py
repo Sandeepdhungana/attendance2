@@ -11,6 +11,22 @@ logger = logging.getLogger(__name__)
 # Create a thread pool executor for I/O operations
 thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
+# Store the main event loop for cross-thread async calls
+_main_event_loop = None
+
+def set_main_event_loop():
+    """Set the main event loop reference for cross-thread async calls"""
+    global _main_event_loop
+    try:
+        _main_event_loop = asyncio.get_running_loop()
+        logger.info("✅ Main event loop stored for cross-thread async calls")
+    except RuntimeError:
+        logger.warning("⚠️ No running event loop found when setting main event loop")
+
+def get_main_event_loop():
+    """Get the stored main event loop"""
+    return _main_event_loop
+
 async def _send_message_to_client(websocket: WebSocket, message: Dict[str, Any], client_id: str = None) -> bool:
     """Send message to a client and return success status"""
     try:
@@ -302,18 +318,23 @@ async def process_websocket_responses():
 
 def handle_future_completion(future, client_id):
     """Handle the completion of a future from the process pool"""
-    # Get the event loop and schedule the async task
-    try:
-        loop = asyncio.get_event_loop()
-        if loop and loop.is_running():
-            # Schedule the coroutine in the event loop from this thread
-            asyncio.run_coroutine_threadsafe(_handle_future_completion_async(future, client_id), loop)
-        else:
-            logger.error("No running event loop found for handle_future_completion")
-    except Exception as e:
-        logger.error(f"Error scheduling async completion handler: {str(e)}")
-        # Fallback to sync processing if async fails
-        _handle_future_completion_sync(future, client_id)
+    # Use the stored main event loop for cross-thread async calls
+    main_loop = get_main_event_loop()
+    
+    if main_loop and not main_loop.is_closed():
+        try:
+            # Schedule the coroutine in the main event loop from this thread
+            asyncio.run_coroutine_threadsafe(_handle_future_completion_async(future, client_id), main_loop)
+            logger.debug(f"✅ Scheduled async completion handler for client {client_id}")
+            return
+        except Exception as e:
+            logger.error(f"❌ Error scheduling async completion handler: {str(e)}")
+    else:
+        logger.warning("⚠️ No main event loop available or loop is closed")
+    
+    # Fallback to sync processing if async fails
+    logger.info(f"🔄 Using sync fallback for client {client_id}")
+    _handle_future_completion_sync(future, client_id)
 
 async def _handle_future_completion_async(future, client_id):
     """Async handler for future completion"""

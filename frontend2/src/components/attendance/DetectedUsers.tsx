@@ -29,11 +29,22 @@ interface DetectedUsersProps {
 export const DetectedUsers: React.FC<DetectedUsersProps> = ({ users }) => {
   const theme = useTheme();
   
+  // Debug logging for users prop
+  React.useEffect(() => {
+    console.log('🎯 DetectedUsers component received users prop:', users);
+    console.log('🎯 Users array length:', users?.length || 0);
+    if (users && users.length > 0) {
+      console.log('🎯 Users details:', users.map(u => `${u.name} (${u.employee_id})`).join(', '));
+    }
+  }, [users]);
+  
   // Filter out invalid users to prevent rendering errors
   const validUsers = React.useMemo(() => {
-    return (users || []).filter(user => 
+    const filtered = (users || []).filter(user => 
       user && typeof user === 'object'
     );
+    console.log('🎯 Valid users after filtering:', filtered.length);
+    return filtered;
   }, [users]);
   
   if (validUsers.length === 0) {

@@ -1,7 +1,7 @@
 from . import create_app
 from .api import router as api_router
 from .api.routes import attendance, employees, timezone, websocket, early_exit
-from .utils.websocket import process_websocket_responses
+from .utils.websocket import process_websocket_responses, set_main_event_loop
 from .dependencies import process_pool
 from .database import query, create, create_class_schema
 from .utils.time_utils import get_local_time
@@ -124,6 +124,10 @@ async def lifespan(app):
     """Manage application lifespan events"""
     # Startup
     logger.info("Starting up application...")
+    
+    # Store the main event loop for cross-thread async calls
+    set_main_event_loop()
+    
     # this is always commented out
     # initialize_back4app()
     # Start the WebSocket response processing tasks

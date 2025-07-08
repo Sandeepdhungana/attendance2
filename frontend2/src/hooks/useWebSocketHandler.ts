@@ -34,19 +34,20 @@ export const useWebSocketHandler = () => {
   const clearDetectedUsers = () => {
     console.log('🧹 Clearing detected users for new streaming session');
     
-    // Clear the UI state first
-    setMultipleUsers([]);
-    setFaceCount(0);
-    setRealTimeDetection(null);
-    
-    // Generate new session ID and set streaming state
+    // Generate new session ID FIRST
     const newSessionId = `session-${Date.now()}`;
     streamingSessionRef.current = newSessionId;
     isStreamingActiveRef.current = true;
     
-    console.log(`🆔 New streaming session started: ${newSessionId}`);
+    console.log(`🆔 NEW streaming session started: ${newSessionId}`);
     console.log(`🔄 Streaming state set to: ${isStreamingActiveRef.current}`);
-    console.log(`📊 Users list cleared, current length: 0`);
+    
+    // Clear the UI state AFTER setting up session
+    setMultipleUsers([]);
+    setFaceCount(0);
+    setRealTimeDetection(null);
+    
+    console.log(`📊 Users list cleared for new session, current length: 0`);
   };
 
   // Function to end streaming session
@@ -87,33 +88,50 @@ export const useWebSocketHandler = () => {
         // Validate the data
         if (!data.name && !data.employee_id) {
           console.warn('⚠️ Received real-time detection with missing name and employee_id:', data);
+          return; // Skip this detection if critical data is missing
+        }
+        
+        // Ensure we have a session ID - create one if streaming but no session exists
+        let currentSessionId = streamingSessionRef.current;
+        if (!currentSessionId) {
+          currentSessionId = `session-${Date.now()}`;
+          streamingSessionRef.current = currentSessionId;
+          console.log(`🆔 Created session ID for real-time detection: ${currentSessionId}`);
         }
         
         const detectionResult: UserResult = {
-          name: data.name || '',
+          name: data.name || 'Unknown',
           employee_id: data.employee_id || '',
           similarity: data.confidence || 0,
           similarity_percent: data.confidence_percent,
           confidence_str: data.confidence_str,
           detection_time: data.timestamp,
-          message: data.message || `Detected with ${data.confidence_str || ''}`,
+          message: data.message || `Detected with ${data.confidence_str || 'N/A'}`,
           is_streaming: true,
-          session_id: streamingSessionRef.current // Add session tracking
+          session_id: currentSessionId // Use current session ID
         };
+        
+        console.log('🎯 Created detection result:', {
+          name: detectionResult.name,
+          employee_id: detectionResult.employee_id,
+          session_id: detectionResult.session_id,
+          message: detectionResult.message
+        });
         
         // Update real-time detection
         setRealTimeDetection(detectionResult);
         console.log('✅ Setting real-time detection:', detectionResult.name);
         
-        // For persistent detected users during streaming session
+        // ALWAYS add to multipleUsers for persistent display
         setMultipleUsers(prev => {
-          console.log(`📝 Current users list length: ${prev.length}`);
-          console.log(`🔍 Looking for existing user: ${detectionResult.employee_id} in session: ${streamingSessionRef.current}`);
+          console.log(`📝 Before update - Users list length: ${prev.length}`);
+          if (prev.length > 0) {
+            console.log('📝 Current users:', prev.map(u => `${u.name} (${u.employee_id})`).join(', '));
+          }
           
-          // Check if this user is already in the current session
+          // Check if this user is already in the list (by employee_id)
           const existingUserIndex = prev.findIndex(u => 
-            u.employee_id === detectionResult.employee_id && 
-            u.session_id === streamingSessionRef.current
+            u.employee_id === detectionResult.employee_id
           );
           
           if (existingUserIndex >= 0) {
@@ -123,16 +141,18 @@ export const useWebSocketHandler = () => {
               ...updatedUsers[existingUserIndex],
               ...detectionResult,
               detection_time: data.timestamp, // Always update with latest detection time
-              message: data.message || updatedUsers[existingUserIndex].message
+              message: data.message || updatedUsers[existingUserIndex].message,
+              session_id: currentSessionId // Update session ID
             };
-            console.log(`🔄 Updated existing user: ${detectionResult.name} in session (position ${existingUserIndex})`);
-            console.log(`📊 Final users list length: ${updatedUsers.length}`);
+            console.log(`🔄 Updated existing user: ${detectionResult.name} (position ${existingUserIndex})`);
+            console.log(`📊 After update - Users list length: ${updatedUsers.length}`);
             return updatedUsers;
           } else {
-            // Add new user to the session
+            // Add new user to the list
             const newUsersList = [detectionResult, ...prev];
-            console.log(`✨ Adding new user to session: ${detectionResult.name}`);
-            console.log(`📊 Final users list length: ${newUsersList.length}`);
+            console.log(`✨ Adding NEW user: ${detectionResult.name}`);
+            console.log(`📊 After adding - Users list length: ${newUsersList.length}`);
+            console.log(`📝 New users list:`, newUsersList.map(u => `${u.name} (${u.employee_id})`).join(', '));
             return newUsersList;
           }
         });
@@ -337,30 +357,30 @@ export const useWebSocketHandler = () => {
         });
       }
       else if (data.status === 'no_face_detected') {
-        console.log(`😞 No face detected. Streaming active: ${isStreamingActiveRef.current}`);
-        // Only clear if not in active streaming session
-        if (!isStreamingActiveRef.current) {
-          console.log('🧹 Not streaming, clearing users list');
+        console.log(`😞 No face detected. Streaming active: ${isStreamingActiveRef.current}, Users count: ${multipleUsers.length}`);
+        // Only clear if not in active streaming session AND no users are currently detected
+        if (!isStreamingActiveRef.current && multipleUsers.length === 0) {
+          console.log('🧹 Not streaming and no users, clearing face count');
           setFaceCount(0);
-          setMultipleUsers([]);
         } else {
-          console.log('🚫 Streaming active, preserving detected users');
+          console.log('🚫 Streaming active or users detected, preserving state');
         }
+        // Always show the "no face detected" message, but don't clear users
         setMessage({
           type: 'error',
           text: 'No face detected in the image',
         });
       }
       else if (data.status === 'no_matching_users') {
-        console.log(`🤷 No matching users. Streaming active: ${isStreamingActiveRef.current}`);
-        // Only clear if not in active streaming session
-        if (!isStreamingActiveRef.current) {
-          console.log('🧹 Not streaming, clearing users list');
-          setMultipleUsers([]);
+        console.log(`🤷 No matching users. Streaming active: ${isStreamingActiveRef.current}, Users count: ${multipleUsers.length}`);
+        // NEVER clear users during streaming - this message might be a race condition
+        if (!isStreamingActiveRef.current && multipleUsers.length === 0) {
+          console.log('🧹 Not streaming and no users, safe to reset state');
           setFaceCount(0);
         } else {
-          console.log('🚫 Streaming active, preserving detected users');
+          console.log('🚫 Preserving detected users (streaming or users exist)');
         }
+        // Show message but don't interfere with detected users
         setMessage({
           type: 'error',
           text: 'No matching users found',
