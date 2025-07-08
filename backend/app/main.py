@@ -2,24 +2,83 @@ from . import create_app
 from .api import router as api_router
 from .api.routes import attendance, employees, timezone, websocket, early_exit
 from .utils.websocket import process_queue, process_websocket_responses
+from .utils.security import SecurityMiddleware, get_real_ip
 from .dependencies import process_pool
 from .database import query, create, create_class_schema
 from .utils.time_utils import get_local_time
+from .config import SECURITY_CONFIG
 import asyncio
 import logging
 from app.models import Employee, Attendance, OfficeTiming, Shift, TimezoneConfig
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request, Response, HTTPException
+from fastapi.responses import JSONResponse
+import re
 
 logger = logging.getLogger(__name__)
 
 app = create_app()
 
-# Configure CORS with WebSocket support
+# Security middleware to block access to sensitive files and IPs
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Security middleware: IP blocking, rate limiting, and path protection"""
+    
+    # Get real client IP (considering proxies)
+    client_ip = get_real_ip(request)
+    request.state.client_ip = client_ip
+    
+    try:
+        # Check IP blocking and rate limiting
+        await SecurityMiddleware.check_security(request)
+        
+        # Check for sensitive path access attempts
+        path = request.url.path.lower()
+        blocked_patterns = [
+            r"^/\.git/?",          # Git directories
+            r"^/\.env",            # Environment files
+            r"^/\.ssh/?",          # SSH keys
+            r"^/config\.ini",      # Config files
+            r"^/secrets\.json",    # Secret files
+            r"^/database\.sqlite", # Database files
+            r"^/\.htaccess",       # Apache config
+            r"^/web\.config",      # IIS config
+            r"^/backup\.sql",      # Backup files
+            r"^/dump\.sql",        # Database dumps
+        ]
+        
+        # Check if path matches any blocked pattern
+        for pattern in blocked_patterns:
+            if re.match(pattern, path):
+                logger.warning(f"Blocked access attempt to sensitive path: {path} from {client_ip}")
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Access forbidden"}
+                )
+        
+        response = await call_next(request)
+        
+        # Add security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        
+        return response
+        
+    except HTTPException as e:
+        return JSONResponse(
+            status_code=e.status_code,
+            content={"detail": e.detail}
+        )
+
+# Configure CORS with security-based settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=SECURITY_CONFIG.get("ALLOWED_ORIGINS", ["http://localhost:3000"]),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Specific methods only
     allow_headers=["*"],
 )
 
@@ -139,19 +198,5 @@ def initialize_back4app():
     logger.info("Database initialization completed!")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the application on startup"""
-    # this is always commented out
-    # initialize_back4app()
-    # Start the WebSocket response processing tasks
-    asyncio.create_task(process_queue())
-    asyncio.create_task(process_websocket_responses())
-    logger.info("Application startup completed")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up resources on shutdown"""
-    process_pool.shutdown()
-    logger.info("Application shutdown completed")
+# Startup and shutdown events are now handled in the lifespan function in __init__.py
+# This fixes the ASGI lifespan protocol warning
