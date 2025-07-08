@@ -41,6 +41,8 @@ export default function Attendance() {
     setEarlyExitDialog,
     sendMessage,
     isConnected,
+    clearDetectedUsers,
+    endStreamingSession,
   } = useWebSocketHandler();
 
   const {
@@ -48,11 +50,10 @@ export default function Attendance() {
     startStreaming,
     stopStreaming,
     startVideoStream,
-  } = useStreaming();
+  } = useStreaming(clearDetectedUsers, endStreamingSession);
 
   const {
     handleEarlyExitReason,
-    handleEarlyExitDialogChange,
   } = useEarlyExit();
 
   const capture = useCallback(async () => {

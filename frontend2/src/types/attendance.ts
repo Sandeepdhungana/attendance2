@@ -13,6 +13,7 @@ export interface UserResult {
   late_message?: string;
   early_exit_message?: string;
   attendance_id?: number;
+  session_id?: string | null;
 }
 
 export interface WebSocketResponse {

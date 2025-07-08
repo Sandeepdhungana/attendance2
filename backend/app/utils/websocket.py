@@ -339,11 +339,12 @@ def handle_future_completion(future, client_id):
             
             return
         
-        # Create real-time detection notifications to send via the response queue
-        real_time_notifications = []
+        # Create real-time detection notifications to send DIRECTLY (not queued)
         
         # For face detections with confidence
         if processed_users and client_id in active_connections:
+            websocket = active_connections[client_id]
+            
             for user in processed_users:
                 # Get formatted confidence value
                 confidence = user.get('similarity', 0)
@@ -392,41 +393,75 @@ def handle_future_completion(future, client_id):
                     "timestamp": get_local_time().isoformat()
                 }
                 
-                # Add to notifications to be queued
-                real_time_notifications.append(real_time_detection)
+                # Log creation with special attention to already-marked users
+                if user.get('already_marked', False):
+                    logger.info(f"Created real-time detection for ALREADY-MARKED user: {employee_name} ({employee_id}) - Confidence: {confidence_str}")
+                    logger.info(f"Already-marked user message: {user.get('message', '')}")
+                else:
+                    logger.info(f"Created real-time detection for {employee_name} ({employee_id}) - Confidence: {confidence_str}")
                 
-                logger.info(f"Created real-time detection for {employee_name} ({employee_id}) - Confidence: {confidence_str}")
+                # SEND REAL-TIME DETECTION DIRECTLY - NO QUEUEING!
+                try:
+                    logger.info(f"🚀 Sending real-time detection DIRECTLY for client {client_id}: {employee_name} - {confidence_str}")
+                    asyncio.run(_send_message_to_client(websocket, real_time_detection, client_id))
+                except Exception as e:
+                    logger.error(f"Error sending real-time detection directly: {e}")
                 
-                # Also add user-friendly notification
-                notification_msg = f"Detected: {employee_name} (ID: {employee_id}) - Confidence: {confidence_str}"
-                status_type = "success" if confidence >= 0.7 else "warning"  # Warning for lower confidence
+                # Check if this is an "already marked" case and create specific notification
+                if user.get('already_marked', False):
+                    # Use the specific streaming message for already marked cases
+                    notification_msg = user.get('streaming_message', f"Attendance already marked for {employee_name}")
+                    status_type = "info"  # Use info type for already marked cases
+                    logger.info(f"Sending already-marked notification: {notification_msg}")
+                else:
+                    # Regular detection notification
+                    notification_msg = f"Detected: {employee_name} (ID: {employee_id}) - Confidence: {confidence_str}"
+                    status_type = "success" if confidence >= 0.7 else "warning"  # Warning for lower confidence
                 
-                # Queue notification message
-                websocket_responses_queue.put({
-                    "client_id": client_id,
-                    "type": "notification",
-                    "notification_type": status_type,
-                    "message": notification_msg
-                })
+                # Send notification directly too
+                try:
+                    notification_data = {
+                        "type": "notification",
+                        "notification_type": status_type,
+                        "message": notification_msg
+                    }
+                    logger.info(f"🚀 Sending notification DIRECTLY for client {client_id}: {notification_msg}")
+                    asyncio.run(_send_message_to_client(websocket, notification_data, client_id))
+                except Exception as e:
+                    logger.error(f"Error sending notification directly: {e}")
         
-        # Add no face/no matching users notifications if needed
-        elif client_id in active_connections:
+        # Add no face/no matching users notifications if needed - ONLY if no processed users
+        elif client_id in active_connections and not processed_users:
+            websocket = active_connections[client_id]
+            
             if no_face_count > 0:
                 # No face detected notification
-                websocket_responses_queue.put({
-                    "client_id": client_id,
-                    "type": "notification",
-                    "notification_type": "warning",
-                    "message": "No face detected in image"
-                })
+                try:
+                    notification_data = {
+                        "type": "notification",
+                        "notification_type": "warning",
+                        "message": "No face detected in image"
+                    }
+                    logger.info(f"🚀 Sending no-face notification DIRECTLY for client {client_id}")
+                    asyncio.run(_send_message_to_client(websocket, notification_data, client_id))
+                except Exception as e:
+                    logger.error(f"Error sending no-face notification directly: {e}")
             else:
-                # No matching users found notification
-                websocket_responses_queue.put({
-                    "client_id": client_id,
-                    "type": "notification",
-                    "notification_type": "warning",
-                    "message": "No matching users found"
-                })
+                # No matching users found notification - only if truly no processed users
+                try:
+                    notification_data = {
+                        "type": "notification",
+                        "notification_type": "warning", 
+                        "message": "No matching users found"
+                    }
+                    logger.info(f"🚀 Sending no-matching-users notification DIRECTLY for client {client_id}")
+                    asyncio.run(_send_message_to_client(websocket, notification_data, client_id))
+                except Exception as e:
+                    logger.error(f"Error sending no-matching-users notification directly: {e}")
+        
+        # If we have processed users, don't send "no matching users found" at all
+        elif processed_users:
+            logger.info(f"✅ Skipping 'no matching users' - we have {len(processed_users)} processed users for client {client_id}")
         
         # Add objectId and id to attendance updates if missing
         if attendance_updates:
@@ -436,7 +471,7 @@ def handle_future_completion(future, client_id):
                 if "id" not in update and "employee_id" in update:
                     update["id"] = update["employee_id"]
 
-        # Put the results in the websocket responses queue
+        # Put the results in the websocket responses queue (for other processing)
         websocket_responses_queue.put({
             "client_id": client_id,
             "processed_users": processed_users,
@@ -445,13 +480,7 @@ def handle_future_completion(future, client_id):
             "no_face_count": no_face_count
         })
         
-        # Queue each real-time detection separately
-        for detection in real_time_notifications:
-            logger.info(f"Queuing real-time detection for client {client_id}: {detection.get('name')} - {detection.get('confidence_str')}")
-            websocket_responses_queue.put({
-                "client_id": client_id,
-                **detection
-            })
+        # DON'T QUEUE REAL-TIME DETECTIONS ANYMORE - THEY'RE SENT DIRECTLY ABOVE
         
         # Also put attendance updates in the processing results queue for broadcasting
         # Filter out non-actionable updates to avoid duplicates

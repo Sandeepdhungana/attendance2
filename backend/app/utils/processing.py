@@ -170,6 +170,8 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                         }
                     })
                     
+                    logger.info(f"🔄 Already marked case for {employee_name} (ID: {employee.get('employee_id')}) - time diff: {time_diff.total_seconds()} seconds")
+                    
                     # Create a response without creating a new database entry
                     attendance_data = {
                         "action": "update",  # Changed from "entry" to "update" to indicate it's just an update
@@ -180,14 +182,20 @@ def process_attendance_for_employee(employee: Dict[str, Any], similarity: float,
                         "similarity": rounded_similarity,
                         "entry_time": entry_time_str,
                         "exit_time": None,
-                        "objectId": existing_attendance.get("objectId")
+                        "objectId": existing_attendance.get("objectId"),
+                        "already_marked": True,  # Flag to indicate this is an already marked case
+                        "streaming_message": f"Attendance already marked for {employee_name}"  # Specific message for streaming
                     }
                     
-                    result["processed_employee"] = {
+                    processed_employee_data = {
                         **attendance_data,
-                        "message": f"Attendance already marked (detected again)", 
+                        "message": f"Attendance already marked for {employee_name}", 
                         "name": employee_name
                     }
+                    
+                    result["processed_employee"] = processed_employee_data
+                    
+                    logger.info(f"✅ Created already-marked processed_employee for {employee_name}: {processed_employee_data.get('message')}")
                     
                     # Important: Only set attendance_update for actual changes to attendance
                     # This prevents duplicate broadcasts for streaming updates
@@ -477,51 +485,90 @@ def process_image_in_process(image_data, entry_type: str, client_id: str):
                     'timestamp': current_time.isoformat()
                 }
 
+                # ALWAYS create a processed employee entry first (fallback)
+                fallback_processed_employee = {
+                    "name": employee.get('name', 'Unknown'),
+                    "employee_id": employee.get("employee_id"),
+                    "employee_name": employee.get('name', 'Unknown'),
+                    "similarity": similarity,
+                    "similarity_percent": similarity_percent,
+                    "detection_time": current_time.isoformat(),
+                    "is_streaming": True,
+                    "message": f"Detected with {similarity_percent}% confidence",
+                    "liveness_info": liveness_info,
+                    "liveness_confidence": liveness_info.get('liveness_confidence', 0),
+                    "anti_spoofing_passed": liveness_info.get('liveness_passed', False),
+                    "action": "detection"  # Default action
+                }
+
                 # Process attendance using shared function
+                processed_employee_final = None
+                attendance_update = None
+                
                 try:
+                    logger.info(f"Processing attendance for employee {employee.get('name')} (ID: {employee.get('employee_id')})")
                     result = process_attendance_for_employee(employee, similarity, entry_type)
                     
+                    logger.info(f"Attendance processing result for {employee.get('name')}: processed_employee={bool(result.get('processed_employee'))}, attendance_update={bool(result.get('attendance_update'))}")
+                    
                     if result["processed_employee"]:
-                        # Add additional data helpful for real-time display
-                        processed_employee = result["processed_employee"]
+                        # Use the attendance processing result
+                        processed_employee_final = result["processed_employee"]
                         
                         # Ensure employee name is present in processed_employee
-                        if not processed_employee.get('name') and employee.get('name'):
-                            processed_employee["name"] = employee.get('name')
+                        if not processed_employee_final.get('name') and employee.get('name'):
+                            processed_employee_final["name"] = employee.get('name')
                             
-                        processed_employee["similarity_percent"] = similarity_percent
-                        processed_employee["detection_time"] = current_time.isoformat()
-                        processed_employee["is_streaming"] = True
+                        processed_employee_final["similarity_percent"] = similarity_percent
+                        processed_employee_final["detection_time"] = current_time.isoformat()
+                        processed_employee_final["is_streaming"] = True
                         
                         # Add liveness information
-                        processed_employee["liveness_info"] = liveness_info
-                        processed_employee["liveness_confidence"] = liveness_info.get('liveness_confidence', 0)
-                        processed_employee["anti_spoofing_passed"] = liveness_info.get('liveness_passed', False)
+                        processed_employee_final["liveness_info"] = liveness_info
+                        processed_employee_final["liveness_confidence"] = liveness_info.get('liveness_confidence', 0)
+                        processed_employee_final["anti_spoofing_passed"] = liveness_info.get('liveness_passed', False)
                         
-                        # Log processed employee for debugging
-                        logger.debug(f"Processed employee for client {client_id}: {processed_employee}")
-                        
-                        processed_employees.append(processed_employee)
+                        logger.info(f"Using attendance result for {employee.get('name')}: {processed_employee_final.get('message', 'No message')}")
+                    else:
+                        # Use fallback if attendance processing didn't return a processed_employee
+                        logger.warning(f"Attendance processing returned no processed_employee for {employee.get('name')}, using fallback")
+                        processed_employee_final = fallback_processed_employee
                     
                     if result["attendance_update"]:
                         # Add additional confidence information
-                        result["attendance_update"]["confidence_percent"] = similarity_percent
-                        result["attendance_update"]["detection_time"] = current_time.isoformat()
+                        attendance_update = result["attendance_update"]
+                        attendance_update["confidence_percent"] = similarity_percent
+                        attendance_update["detection_time"] = current_time.isoformat()
                         
                         # Ensure employee name is present in attendance update too
-                        if not result["attendance_update"].get('name') and employee.get('name'):
-                            result["attendance_update"]["name"] = employee.get('name')
+                        if not attendance_update.get('name') and employee.get('name'):
+                            attendance_update["name"] = employee.get('name')
                         
                         # Add liveness information
-                        result["attendance_update"]["liveness_info"] = liveness_info
-                        result["attendance_update"]["liveness_confidence"] = liveness_info.get('liveness_confidence', 0)
-                        result["attendance_update"]["anti_spoofing_passed"] = liveness_info.get('liveness_passed', False)
+                        attendance_update["liveness_info"] = liveness_info
+                        attendance_update["liveness_confidence"] = liveness_info.get('liveness_confidence', 0)
+                        attendance_update["anti_spoofing_passed"] = liveness_info.get('liveness_passed', False)
                             
-                        attendance_updates.append(result["attendance_update"])
+                        attendance_updates.append(attendance_update)
+                        logger.info(f"Added attendance update for {employee.get('name')}")
+                    else:
+                        logger.info(f"No attendance update needed for {employee.get('name')}")
+                        
                 except Exception as e:
                     logger.error(f"Error processing attendance for employee {employee.get('employee_id')}: {str(e)}")
-                    continue
+                    # Use fallback employee data even if attendance processing fails
+                    logger.warning(f"Using fallback processed_employee for {employee.get('name')} due to error")
+                    processed_employee_final = fallback_processed_employee
+                    processed_employee_final["message"] = f"Detected with {similarity_percent}% confidence (attendance processing error)"
 
+                # ALWAYS add the employee to processed_employees (this ensures detected users always appear)
+                if processed_employee_final:
+                    processed_employees.append(processed_employee_final)
+                    logger.info(f"✅ Added {employee.get('name')} to processed_employees list (total: {len(processed_employees)})")
+                else:
+                    logger.error(f"❌ Failed to create processed_employee for {employee.get('name')}")
+
+            logger.info(f"🎯 Final result for client {client_id}: {len(processed_employees)} processed employees, {len(attendance_updates)} attendance updates")
             return processed_employees, attendance_updates, last_recognized_employees, 0
 
         except Exception as e:
