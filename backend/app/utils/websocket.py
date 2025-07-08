@@ -11,21 +11,23 @@ logger = logging.getLogger(__name__)
 # Create a thread pool executor for I/O operations
 thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
-# Store the main event loop for cross-thread async calls
-_main_event_loop = None
+# Store the main event loop for use in threads
+_main_loop = None
 
-def set_main_event_loop():
-    """Set the main event loop reference for cross-thread async calls"""
-    global _main_event_loop
-    try:
-        _main_event_loop = asyncio.get_running_loop()
-        logger.info("✅ Main event loop stored for cross-thread async calls")
-    except RuntimeError:
-        logger.warning("⚠️ No running event loop found when setting main event loop")
+def set_main_loop(loop):
+    """Set the main event loop for use in thread pool functions"""
+    global _main_loop
+    _main_loop = loop
 
-def get_main_event_loop():
-    """Get the stored main event loop"""
-    return _main_event_loop
+def get_main_loop():
+    """Get the main event loop"""
+    global _main_loop
+    if _main_loop is None:
+        try:
+            _main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _main_loop = asyncio.get_event_loop()
+    return _main_loop
 
 async def _send_message_to_client(websocket: WebSocket, message: Dict[str, Any], client_id: str = None) -> bool:
     """Send message to a client and return success status"""
@@ -318,26 +320,6 @@ async def process_websocket_responses():
 
 def handle_future_completion(future, client_id):
     """Handle the completion of a future from the process pool"""
-    # Use the stored main event loop for cross-thread async calls
-    main_loop = get_main_event_loop()
-    
-    if main_loop and not main_loop.is_closed():
-        try:
-            # Schedule the coroutine in the main event loop from this thread
-            asyncio.run_coroutine_threadsafe(_handle_future_completion_async(future, client_id), main_loop)
-            logger.debug(f"✅ Scheduled async completion handler for client {client_id}")
-            return
-        except Exception as e:
-            logger.error(f"❌ Error scheduling async completion handler: {str(e)}")
-    else:
-        logger.warning("⚠️ No main event loop available or loop is closed")
-    
-    # Fallback to sync processing if async fails
-    logger.info(f"🔄 Using sync fallback for client {client_id}")
-    _handle_future_completion_sync(future, client_id)
-
-async def _handle_future_completion_async(future, client_id):
-    """Async handler for future completion"""
     client_pending_tasks, client_pending_tasks_lock = get_client_tasks()
     pending_futures = get_pending_futures()
     processing_results_queue, websocket_responses_queue = get_queues()
@@ -354,31 +336,43 @@ async def _handle_future_completion_async(future, client_id):
             
             logger.warning(f"Anti-spoofing failed for client {client_id}: {error_message}")
             
-            # Send anti-spoofing failure notification
-            websocket_responses_queue.put({
-                "client_id": client_id,
-                "status": "anti_spoofing_failed",
-                "message": error_message,
-                "liveness_info": liveness_info,
-                "processed_users": [],
-                "attendance_updates": [],
-                "no_face_count": 3
-            })
-            
-            # Also send notification
-            websocket_responses_queue.put({
-                "client_id": client_id,
-                "type": "notification",
-                "notification_type": "error",
-                "message": f"Security Alert: {error_message}"
-            })
+            # Send anti-spoofing failure notification directly
+            if client_id in active_connections:
+                websocket = active_connections[client_id]
+                try:
+                    loop = get_main_loop()
+                    # Send anti-spoofing status
+                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                        "client_id": client_id,
+                        "status": "anti_spoofing_failed",
+                        "message": error_message,
+                        "liveness_info": liveness_info,
+                        "processed_users": [],
+                        "attendance_updates": [],
+                        "no_face_count": 3
+                    }, client_id), loop)
+                    
+                    # Also send notification
+                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                        "client_id": client_id,
+                        "type": "notification",
+                        "notification_type": "error",
+                        "message": f"Security Alert: {error_message}"
+                    }, client_id), loop)
+                    
+                    logger.info(f"✅ Sent anti-spoofing failure directly to {client_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send anti-spoofing failure to {client_id}: {str(e)}")
+            else:
+                logger.warning(f"Client {client_id} not in active connections, cannot send anti-spoofing failure")
             
             return
         
-        # Send real-time detection notifications DIRECTLY to avoid queueing issues
+        # Create real-time detection notifications to send via the response queue
+        real_time_notifications = []
+        
+        # For face detections with confidence
         if processed_users and client_id in active_connections:
-            websocket = active_connections[client_id]
-            
             for user in processed_users:
                 # Get formatted confidence value
                 confidence = user.get('similarity', 0)
@@ -427,6 +421,9 @@ async def _handle_future_completion_async(future, client_id):
                     "timestamp": get_local_time().isoformat()
                 }
                 
+                # Add to notifications to be queued
+                real_time_notifications.append(real_time_detection)
+                
                 # Log creation with special attention to already-marked users
                 if user.get('already_marked', False):
                     logger.info(f"Created real-time detection for ALREADY-MARKED user: {employee_name} ({employee_id}) - Confidence: {confidence_str}")
@@ -434,49 +431,64 @@ async def _handle_future_completion_async(future, client_id):
                 else:
                     logger.info(f"Created real-time detection for {employee_name} ({employee_id}) - Confidence: {confidence_str}")
                 
-                # Send real-time detection DIRECTLY
-                try:
-                    await _send_message_to_client(websocket, real_time_detection, client_id)
-                    logger.info(f"✅ Sent real-time detection DIRECTLY for {employee_name} - {confidence_str}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to send real-time detection directly: {str(e)}")
-                
-                # Check if this is an "already marked" case and send notification DIRECTLY
+                # Check if this is an "already marked" case and create specific notification
                 if user.get('already_marked', False):
                     # Use the specific streaming message for already marked cases
                     notification_msg = user.get('streaming_message', f"Attendance already marked for {employee_name}")
                     status_type = "info"  # Use info type for already marked cases
-                    logger.info(f"Sending already-marked notification DIRECTLY: {notification_msg}")
+                    logger.info(f"Sending already-marked notification: {notification_msg}")
                 else:
                     # Regular detection notification
                     notification_msg = f"Detected: {employee_name} (ID: {employee_id}) - Confidence: {confidence_str}"
                     status_type = "success" if confidence >= 0.7 else "warning"  # Warning for lower confidence
                 
-                # Send notification DIRECTLY
-                try:
-                    await send_notification(websocket, notification_msg, status_type, client_id)
-                    logger.info(f"✅ Sent notification DIRECTLY: {notification_msg}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to send notification directly: {str(e)}")
+                # Send notification message directly to client
+                if client_id in active_connections:
+                    websocket = active_connections[client_id]
+                    try:
+                        loop = get_main_loop()
+                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                            "client_id": client_id,
+                            "type": "notification",
+                            "notification_type": status_type,
+                            "message": notification_msg
+                        }, client_id), loop)
+                        logger.info(f"✅ Sent notification directly to {client_id}: {notification_msg}")
+                    except Exception as e:
+                        logger.error(f"Failed to send notification to {client_id}: {str(e)}")
+                else:
+                    logger.warning(f"Client {client_id} not in active connections, cannot send notification")
         
-        # Send no face/no matching users notifications DIRECTLY if needed
+        # Add no face/no matching users notifications if needed
         elif client_id in active_connections:
             websocket = active_connections[client_id]
-            
             if no_face_count > 0:
-                # Send no face detected notification DIRECTLY
+                # No face detected notification - send directly
                 try:
-                    await send_notification(websocket, "No face detected in image", "warning", client_id)
-                    logger.info("✅ Sent 'no face detected' notification DIRECTLY")
+                    loop = get_main_loop()
+                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                        "client_id": client_id,
+                        "type": "notification",
+                        "notification_type": "warning",
+                        "message": "No face detected in image"
+                    }, client_id), loop)
+                    logger.info(f"✅ Sent no face notification directly to {client_id}")
                 except Exception as e:
-                    logger.error(f"❌ Failed to send no face notification directly: {str(e)}")
+                    logger.error(f"Failed to send no face notification to {client_id}: {str(e)}")
             elif not processed_users:
                 # Only send "no matching users" if there were no processed users at all
+                # This prevents interference with already-marked users who should show real-time detection
                 try:
-                    await send_notification(websocket, "No matching users found", "warning", client_id)
-                    logger.info("✅ Sent 'no matching users found' notification DIRECTLY")
+                    loop = get_main_loop()
+                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                        "client_id": client_id,
+                        "type": "notification",
+                        "notification_type": "warning", 
+                        "message": "No matching users found"
+                    }, client_id), loop)
+                    logger.info(f"✅ Sent no matching users notification directly to {client_id}")
                 except Exception as e:
-                    logger.error(f"❌ Failed to send no matching users notification directly: {str(e)}")
+                    logger.error(f"Failed to send no matching users notification to {client_id}: {str(e)}")
             # If processed_users exists (including already-marked users), don't send "no matching users"
             # The real-time detection will handle showing the user
         
@@ -488,7 +500,7 @@ async def _handle_future_completion_async(future, client_id):
                 if "id" not in update and "employee_id" in update:
                     update["id"] = update["employee_id"]
 
-        # Put the results in the websocket responses queue only for the main response
+        # Put the results in the websocket responses queue
         websocket_responses_queue.put({
             "client_id": client_id,
             "processed_users": processed_users,
@@ -496,6 +508,24 @@ async def _handle_future_completion_async(future, client_id):
             "last_recognized_users": last_recognized_users,
             "no_face_count": no_face_count
         })
+        
+        # Send each real-time detection directly to client instead of queueing
+        for detection in real_time_notifications:
+            logger.info(f"Sending real-time detection DIRECTLY to client {client_id}: {detection.get('name')} - {detection.get('confidence_str')}")
+            if client_id in active_connections:
+                websocket = active_connections[client_id]
+                try:
+                    # Send directly to client immediately using run_coroutine_threadsafe
+                    loop = get_main_loop()
+                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                        "client_id": client_id,
+                        **detection
+                    }, client_id), loop)
+                    logger.info(f"✅ Sent real-time detection directly to {client_id}: {detection.get('name')}")
+                except Exception as e:
+                    logger.error(f"Failed to send real-time detection to {client_id}: {str(e)}")
+            else:
+                logger.warning(f"Client {client_id} not in active connections, cannot send real-time detection")
         
         # Also put attendance updates in the processing results queue for broadcasting
         # Filter out non-actionable updates to avoid duplicates
@@ -538,186 +568,6 @@ async def _handle_future_completion_async(future, client_id):
             
     finally:
         # Always decrement pending tasks counter, regardless of success or failure
-        with client_pending_tasks_lock:
-            if client_id in client_pending_tasks:
-                client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)
-                logger.info(f"Decreased pending tasks for client {client_id} to {client_pending_tasks[client_id]}")
-        
-        # Remove future from pending futures
-        if future in pending_futures:
-            del pending_futures[future]
-
-def _handle_future_completion_sync(future, client_id):
-    """Sync fallback handler for future completion when async fails"""
-    client_pending_tasks, client_pending_tasks_lock = get_client_tasks()
-    pending_futures = get_pending_futures()
-    processing_results_queue, websocket_responses_queue = get_queues()
-    active_connections = get_active_connections()
-    
-    try:
-        processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
-        
-        logger.info(f"🔄 Using SYNC fallback for client {client_id} - processed_users: {len(processed_users) if processed_users else 0}")
-        
-        # Handle anti-spoofing failure (error code 3)
-        if no_face_count == 3:
-            # Anti-spoofing failed
-            error_message = last_recognized_users.get("message", "Potential spoofing attempt detected")
-            liveness_info = last_recognized_users.get("liveness_info", {})
-            
-            logger.warning(f"Anti-spoofing failed for client {client_id}: {error_message}")
-            
-            # Send anti-spoofing failure notification
-            websocket_responses_queue.put({
-                "client_id": client_id,
-                "status": "anti_spoofing_failed",
-                "message": error_message,
-                "liveness_info": liveness_info,
-                "processed_users": [],
-                "attendance_updates": [],
-                "no_face_count": 3
-            })
-            
-            # Also send notification
-            websocket_responses_queue.put({
-                "client_id": client_id,
-                "type": "notification",
-                "notification_type": "error",
-                "message": f"Security Alert: {error_message}"
-            })
-            
-            return
-        
-        # For processed users, queue real-time detection notifications
-        if processed_users and client_id in active_connections:
-            for user in processed_users:
-                # Get formatted confidence value
-                confidence = user.get('similarity', 0)
-                confidence_percent = user.get('similarity_percent', None)
-                
-                if confidence_percent is None:
-                    # Calculate percentage if not already present
-                    confidence_percent = round(confidence * 100, 1) if isinstance(confidence, float) else confidence
-                
-                confidence_str = f"{confidence_percent}%"
-                
-                # Name extraction
-                employee_id = user.get('employee_id', '')
-                employee_name = user.get('name', '')
-                
-                # If name is still empty, try other possible fields
-                if not employee_name:
-                    if user.get('employee_name'):
-                        employee_name = user.get('employee_name')
-                    elif 'message' in user and 'detected' in user['message'].lower():
-                        parts = user['message'].split(':')
-                        if len(parts) > 1:
-                            employee_name = parts[1].strip()
-                
-                if not employee_name and employee_id and employee_id in last_recognized_users:
-                    employee_data = last_recognized_users[employee_id].get('employee', {})
-                    if employee_data.get('name'):
-                        employee_name = employee_data.get('name')
-                
-                if not employee_name:
-                    logger.warning(f"Could not determine name for employee ID {employee_id}. User data: {user}")
-                    employee_name = "Unknown"
-                
-                # Queue real-time detection
-                real_time_detection = {
-                    "client_id": client_id,
-                    "type": "real_time_detection",
-                    "name": employee_name,
-                    "employee_id": employee_id,
-                    "confidence": confidence,
-                    "confidence_percent": confidence_percent,
-                    "confidence_str": confidence_str,
-                    "message": user.get('message', ''),
-                    "timestamp": get_local_time().isoformat()
-                }
-                
-                websocket_responses_queue.put(real_time_detection)
-                logger.info(f"🔄 SYNC: Queued real-time detection for {employee_name} - {confidence_str}")
-                
-                # Queue notification
-                if user.get('already_marked', False):
-                    notification_msg = user.get('streaming_message', f"Attendance already marked for {employee_name}")
-                    status_type = "info"
-                    logger.info(f"🔄 SYNC: Queuing already-marked notification: {notification_msg}")
-                else:
-                    notification_msg = f"Detected: {employee_name} (ID: {employee_id}) - Confidence: {confidence_str}"
-                    status_type = "success" if confidence >= 0.7 else "warning"
-                
-                websocket_responses_queue.put({
-                    "client_id": client_id,
-                    "type": "notification",
-                    "notification_type": status_type,
-                    "message": notification_msg
-                })
-        
-        # Queue no face/no matching users notifications if needed
-        elif client_id in active_connections:
-            if no_face_count > 0:
-                websocket_responses_queue.put({
-                    "client_id": client_id,
-                    "type": "notification",
-                    "notification_type": "warning",
-                    "message": "No face detected in image"
-                })
-                logger.info("🔄 SYNC: Queued 'no face detected' notification")
-            elif not processed_users:
-                websocket_responses_queue.put({
-                    "client_id": client_id,
-                    "type": "notification",
-                    "notification_type": "warning", 
-                    "message": "No matching users found"
-                })
-                logger.info("🔄 SYNC: Queued 'no matching users found' notification")
-        
-        # Add objectId and id to attendance updates if missing
-        if attendance_updates:
-            for update in attendance_updates:
-                if "objectId" not in update and "attendance_id" in update:
-                    update["objectId"] = update["attendance_id"]
-                if "id" not in update and "employee_id" in update:
-                    update["id"] = update["employee_id"]
-
-        # Put the results in the websocket responses queue only for the main response
-        websocket_responses_queue.put({
-            "client_id": client_id,
-            "processed_users": processed_users,
-            "attendance_updates": attendance_updates,
-            "last_recognized_users": last_recognized_users,
-            "no_face_count": no_face_count
-        })
-        
-        # Handle attendance updates
-        if attendance_updates:
-            actionable_updates = [
-                update for update in attendance_updates 
-                if update.get("action") not in ["update", "info"]
-                and not update.get("is_streaming", False)
-            ]
-            
-            if actionable_updates:
-                # Just queue for sync version since we can't await
-                for update in actionable_updates:
-                    processing_results_queue.put(update)
-                logger.info(f"🔄 SYNC: Queued {len(actionable_updates)} actionable attendance updates")
-            
-    except Exception as e:
-        logger.error(f"Error in sync future completion handler for client {client_id}: {str(e)}")
-        # Put error message in the websocket responses queue
-        websocket_responses_queue.put({
-            "client_id": client_id,
-            "error": str(e),
-            "processed_users": [],
-            "attendance_updates": [],
-            "no_face_count": 0
-        })
-        
-    finally:
-        # Always decrement pending tasks counter
         with client_pending_tasks_lock:
             if client_id in client_pending_tasks:
                 client_pending_tasks[client_id] = max(0, client_pending_tasks[client_id] - 1)

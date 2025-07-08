@@ -1,7 +1,7 @@
 from . import create_app
 from .api import router as api_router
 from .api.routes import attendance, employees, timezone, websocket, early_exit
-from .utils.websocket import process_websocket_responses, set_main_event_loop
+from .utils.websocket import process_websocket_responses, set_main_loop
 from .dependencies import process_pool
 from .database import query, create, create_class_schema
 from .utils.time_utils import get_local_time
@@ -125,8 +125,10 @@ async def lifespan(app):
     # Startup
     logger.info("Starting up application...")
     
-    # Store the main event loop for cross-thread async calls
-    set_main_event_loop()
+    # Set the main event loop for websocket operations
+    loop = asyncio.get_running_loop()
+    set_main_loop(loop)
+    logger.info("Main event loop set for websocket operations")
     
     # this is always commented out
     # initialize_back4app()
