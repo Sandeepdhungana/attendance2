@@ -38,22 +38,4 @@ SENDPULSE_CLIENT_ID = os.getenv("SENDPULSE_CLIENT_ID")
 SENDPULSE_CLIENT_SECRET = os.getenv("SENDPULSE_CLIENT_SECRET")
 
 # Face recognition settings
-FACE_RECOGNITION_THRESHOLD = float(os.getenv("FACE_RECOGNITION_THRESHOLD", "0.6"))
-
-# Security Configuration
-SECURITY_CONFIG = {
-    "RATE_LIMIT_REQUESTS": 100,  # requests per minute per IP
-    "RATE_LIMIT_WINDOW": 60,     # seconds
-    "BLOCKED_IPS": [
-        "194.50.16.252",  # Add the IP that was probing your server
-    ],
-    "ALLOWED_ORIGINS": [
-        "http://localhost:3000",
-        "http://localhost:8080", 
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8080",
-        "http://localhost:5173",
-        "https://footfall.duckdns.org"
-    ],
-    "LOG_SECURITY_EVENTS": True,
-} 
+FACE_RECOGNITION_THRESHOLD = float(os.getenv("FACE_RECOGNITION_THRESHOLD", "0.6")) 
