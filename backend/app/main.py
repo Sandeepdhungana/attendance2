@@ -126,9 +126,14 @@ async def lifespan(app):
     logger.info("Starting up application...")
     
     # Set the main event loop for websocket operations
-    loop = asyncio.get_running_loop()
-    set_main_loop(loop)
-    logger.info("Main event loop set for websocket operations")
+    try:
+        loop = asyncio.get_running_loop()
+        logger.info(f"Got running loop: {loop}")
+        set_main_loop(loop)
+        logger.info("Main event loop set for websocket operations")
+    except Exception as e:
+        logger.error(f"Failed to set main event loop: {str(e)}")
+        raise
     
     # this is always commented out
     # initialize_back4app()

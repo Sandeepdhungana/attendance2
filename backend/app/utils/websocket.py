@@ -18,15 +18,13 @@ def set_main_loop(loop):
     """Set the main event loop for use in thread pool functions"""
     global _main_loop
     _main_loop = loop
+    logger.info(f"Main event loop set: {loop} (running: {loop.is_running()})")
 
 def get_main_loop():
     """Get the main event loop"""
     global _main_loop
     if _main_loop is None:
-        try:
-            _main_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            _main_loop = asyncio.get_event_loop()
+        raise RuntimeError("Main event loop not set. Call set_main_loop() during application startup.")
     return _main_loop
 
 async def _send_message_to_client(websocket: WebSocket, message: Dict[str, Any], client_id: str = None) -> bool:
@@ -447,7 +445,8 @@ def handle_future_completion(future, client_id):
                     websocket = active_connections[client_id]
                     try:
                         loop = get_main_loop()
-                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                        logger.debug(f"Got main loop for notification: {loop}")
+                        future = asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
                             "client_id": client_id,
                             "type": "notification",
                             "notification_type": status_type,
@@ -456,6 +455,7 @@ def handle_future_completion(future, client_id):
                         logger.info(f"✅ Sent notification directly to {client_id}: {notification_msg}")
                     except Exception as e:
                         logger.error(f"Failed to send notification to {client_id}: {str(e)}")
+                        logger.error(f"Error details: {type(e).__name__}: {str(e)}")
                 else:
                     logger.warning(f"Client {client_id} not in active connections, cannot send notification")
         
@@ -517,13 +517,15 @@ def handle_future_completion(future, client_id):
                 try:
                     # Send directly to client immediately using run_coroutine_threadsafe
                     loop = get_main_loop()
-                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                    logger.debug(f"Got main loop for real-time detection: {loop}")
+                    future = asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
                         "client_id": client_id,
                         **detection
                     }, client_id), loop)
                     logger.info(f"✅ Sent real-time detection directly to {client_id}: {detection.get('name')}")
                 except Exception as e:
                     logger.error(f"Failed to send real-time detection to {client_id}: {str(e)}")
+                    logger.error(f"Error details: {type(e).__name__}: {str(e)}")
             else:
                 logger.warning(f"Client {client_id} not in active connections, cannot send real-time detection")
         

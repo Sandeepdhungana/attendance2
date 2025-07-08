@@ -138,6 +138,20 @@ class EmployeeCache:
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
+    # Fallback: Ensure main loop is set for websocket operations (in case lifespan wasn't called)
+    try:
+        from app.utils.websocket import set_main_loop, get_main_loop
+        try:
+            get_main_loop()  # Test if main loop is already set
+        except RuntimeError:
+            # Main loop not set, set it now as fallback
+            import asyncio
+            loop = asyncio.get_running_loop()
+            set_main_loop(loop)
+            logger.info(f"Fallback: Set main event loop for websocket operations: {loop}")
+    except Exception as e:
+        logger.error(f"Error setting fallback main loop: {str(e)}")
+
     # Generate unique client ID
     client_id = str(uuid.uuid4())
     active_connections = get_active_connections()
