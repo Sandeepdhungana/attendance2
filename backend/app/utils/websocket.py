@@ -189,6 +189,21 @@ async def _monitor_memory():
 async def _send_message_to_client(websocket: WebSocket, message: Dict[str, Any], client_id: str = None) -> bool:
     """Send message to a client and return success status with connection health tracking"""
     try:
+        # Check if client is still in active connections
+        active_connections = get_active_connections()
+        if client_id and client_id not in active_connections:
+            logger.debug(f"Client {client_id} no longer in active connections, skipping message")
+            return False
+        
+        # Check WebSocket state before sending
+        if hasattr(websocket, 'client_state') and websocket.client_state.name in ['DISCONNECTED', 'CLOSED']:
+            logger.debug(f"WebSocket for client {client_id} is {websocket.client_state.name}, skipping message")
+            # Remove from active connections if closed
+            if client_id and client_id in active_connections:
+                del active_connections[client_id]
+                _connection_health.pop(client_id, None)
+            return False
+        
         # Update connection health
         if client_id:
             if client_id not in _connection_health:
@@ -202,10 +217,20 @@ async def _send_message_to_client(websocket: WebSocket, message: Dict[str, Any],
         return True
     except Exception as e:
         if client_id:
-            logger.error(f"Error sending message to client {client_id}: {str(e)}")
-            # Update connection health
-            if client_id in _connection_health:
-                _connection_health[client_id]["failed_pings"] = _connection_health[client_id].get("failed_pings", 0) + 1
+            # Check for specific closed connection errors
+            error_msg = str(e).lower()
+            if any(err in error_msg for err in ['websocket.close', 'connection closed', 'websocket.send']):
+                logger.debug(f"WebSocket connection closed for client {client_id}, removing from active connections")
+                # Remove from active connections immediately
+                active_connections = get_active_connections()
+                if client_id in active_connections:
+                    del active_connections[client_id]
+                _connection_health.pop(client_id, None)
+            else:
+                logger.error(f"Error sending message to client {client_id}: {str(e)}")
+                # Update connection health for other errors
+                if client_id in _connection_health:
+                    _connection_health[client_id]["failed_pings"] = _connection_health[client_id].get("failed_pings", 0) + 1
         return False
 
 async def _cleanup_unhealthy_connections():
@@ -581,9 +606,14 @@ def handle_future_completion(future, client_id):
     active_connections = get_active_connections()
     
     try:
+        # Check if future was cancelled or process pool was terminated
+        if future.cancelled():
+            logger.debug(f"Future for client {client_id} was cancelled, skipping processing")
+            return
+            
         # Check if client is still connected before processing
         if client_id not in active_connections:
-            logger.debug(f"Client {client_id} disconnected before future completion")
+            logger.debug(f"Client {client_id} disconnected before future completion, skipping processing")
             return
             
         # Limit the number of pending futures per client to prevent memory bloat
@@ -591,8 +621,22 @@ def handle_future_completion(future, client_id):
         if current_futures > MAX_FUTURES_PER_CLIENT:
             logger.warning(f"Client {client_id} has too many pending futures ({current_futures}), skipping")
             return
-            
-        processed_users, attendance_updates, last_recognized_users, no_face_count = future.result()
+        
+        # Try to get the result with error handling for terminated processes
+        try:
+            processed_users, attendance_updates, last_recognized_users, no_face_count = future.result(timeout=1)
+        except concurrent.futures.process.BrokenProcessPool as e:
+            logger.warning(f"Process pool broken for client {client_id}: {str(e)}")
+            return
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"Future result timeout for client {client_id}")
+            return
+        except Exception as e:
+            if "terminated abruptly" in str(e) or "broken" in str(e).lower():
+                logger.warning(f"Process terminated for client {client_id}: {str(e)}")
+                return
+            else:
+                raise  # Re-raise other exceptions to be handled by outer try-except
         
         # Handle anti-spoofing failure (error code 3)
         if no_face_count == 3:
@@ -606,32 +650,40 @@ def handle_future_completion(future, client_id):
             if client_id in active_connections:
                 websocket = active_connections[client_id]
                 try:
-                    loop = get_main_loop()
-                    # Send anti-spoofing status
-                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
-                        "client_id": client_id,
-                        "status": "anti_spoofing_failed",
-                        "message": error_message,
-                        "liveness_info": liveness_info,
-                        "processed_users": [],
-                        "attendance_updates": [],
-                        "no_face_count": 3
-                    }, client_id), loop)
-                    
-                    # Also send notification
-                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
-                        "client_id": client_id,
-                        "type": "notification",
-                        "notification_type": "error",
-                        "message": f"Security Alert: {error_message}"
-                    }, client_id), loop)
-                    
-                    logger.info(f"✅ Sent anti-spoofing failure directly to {client_id}")
+                    # Check WebSocket state before attempting to send
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name in ['DISCONNECTED', 'CLOSED']:
+                        logger.debug(f"WebSocket for {client_id} is {websocket.client_state.name}, skipping anti-spoofing failure")
+                        # Remove from active connections
+                        del active_connections[client_id]
+                        _connection_health.pop(client_id, None)
+                    else:
+                        loop = get_main_loop()
+                        # Send anti-spoofing status
+                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                            "client_id": client_id,
+                            "status": "anti_spoofing_failed",
+                            "message": error_message,
+                            "liveness_info": liveness_info,
+                            "processed_users": [],
+                            "attendance_updates": [],
+                            "no_face_count": 3
+                        }, client_id), loop)
+                        
+                        # Also send notification
+                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                            "client_id": client_id,
+                            "type": "notification",
+                            "notification_type": "error",
+                            "message": f"Security Alert: {error_message}"
+                        }, client_id), loop)
+                        
+                        logger.info(f"✅ Sent anti-spoofing failure directly to {client_id}")
                 except Exception as e:
-                    logger.error(f"Failed to send anti-spoofing failure to {client_id}: {str(e)}")
-                    # Mark connection as unhealthy
-                    if client_id in _connection_health:
-                        _connection_health[client_id]["failed_pings"] = _connection_health[client_id].get("failed_pings", 0) + 1
+                    logger.debug(f"Failed to send anti-spoofing failure to {client_id}: {str(e)}")
+                    # Remove from active connections on error
+                    if client_id in active_connections:
+                        del active_connections[client_id]
+                    _connection_health.pop(client_id, None)
             else:
                 logger.debug(f"Client {client_id} not in active connections, cannot send anti-spoofing failure")
             
@@ -706,20 +758,28 @@ def handle_future_completion(future, client_id):
                 if client_id in active_connections:
                     websocket = active_connections[client_id]
                     try:
-                        loop = get_main_loop()
-                        # Use run_coroutine_threadsafe but don't wait for result to prevent blocking
-                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
-                            "client_id": client_id,
-                            "type": "notification",
-                            "notification_type": status_type,
-                            "message": notification_msg
-                        }, client_id), loop)
-                        logger.debug(f"✅ Queued notification for {client_id}: {notification_msg[:50]}...")
+                        # Check WebSocket state before attempting to send
+                        if hasattr(websocket, 'client_state') and websocket.client_state.name in ['DISCONNECTED', 'CLOSED']:
+                            logger.debug(f"WebSocket for {client_id} is {websocket.client_state.name}, skipping notification")
+                            # Remove from active connections
+                            del active_connections[client_id]
+                            _connection_health.pop(client_id, None)
+                        else:
+                            loop = get_main_loop()
+                            # Use run_coroutine_threadsafe but don't wait for result to prevent blocking
+                            asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                                "client_id": client_id,
+                                "type": "notification",
+                                "notification_type": status_type,
+                                "message": notification_msg
+                            }, client_id), loop)
+                            logger.debug(f"✅ Queued notification for {client_id}: {notification_msg[:50]}...")
                     except Exception as e:
-                        logger.error(f"Failed to send notification to {client_id}: {str(e)}")
-                        # Mark connection as unhealthy
-                        if client_id in _connection_health:
-                            _connection_health[client_id]["failed_pings"] = _connection_health[client_id].get("failed_pings", 0) + 1
+                        logger.debug(f"Failed to send notification to {client_id}: {str(e)}")
+                        # Remove from active connections on error
+                        if client_id in active_connections:
+                            del active_connections[client_id]
+                        _connection_health.pop(client_id, None)
                 else:
                     logger.debug(f"Client {client_id} not in active connections, cannot send notification")
         
@@ -729,35 +789,51 @@ def handle_future_completion(future, client_id):
             if no_face_count > 0:
                 # No face detected notification - send directly
                 try:
-                    loop = get_main_loop()
-                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
-                        "client_id": client_id,
-                        "type": "notification",
-                        "notification_type": "warning",
-                        "message": "No face detected in image"
-                    }, client_id), loop)
-                    logger.debug(f"✅ Queued no face notification for {client_id}")
+                    # Check WebSocket state before attempting to send
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name in ['DISCONNECTED', 'CLOSED']:
+                        logger.debug(f"WebSocket for {client_id} is {websocket.client_state.name}, skipping no face notification")
+                        # Remove from active connections
+                        del active_connections[client_id]
+                        _connection_health.pop(client_id, None)
+                    else:
+                        loop = get_main_loop()
+                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                            "client_id": client_id,
+                            "type": "notification",
+                            "notification_type": "warning",
+                            "message": "No face detected in image"
+                        }, client_id), loop)
+                        logger.debug(f"✅ Queued no face notification for {client_id}")
                 except Exception as e:
-                    logger.error(f"Failed to send no face notification to {client_id}: {str(e)}")
-                    # Mark connection as unhealthy
-                    if client_id in _connection_health:
-                        _connection_health[client_id]["failed_pings"] = _connection_health[client_id].get("failed_pings", 0) + 1
+                    logger.debug(f"Failed to send no face notification to {client_id}: {str(e)}")
+                    # Remove from active connections on error
+                    if client_id in active_connections:
+                        del active_connections[client_id]
+                    _connection_health.pop(client_id, None)
             elif not processed_users:
                 # Only send "no matching users" if there were no processed users at all
                 try:
-                    loop = get_main_loop()
-                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
-                        "client_id": client_id,
-                        "type": "notification",
-                        "notification_type": "warning", 
-                        "message": "No matching users found"
-                    }, client_id), loop)
-                    logger.debug(f"✅ Queued no matching users notification for {client_id}")
+                    # Check WebSocket state before attempting to send
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name in ['DISCONNECTED', 'CLOSED']:
+                        logger.debug(f"WebSocket for {client_id} is {websocket.client_state.name}, skipping no matching users notification")
+                        # Remove from active connections
+                        del active_connections[client_id]
+                        _connection_health.pop(client_id, None)
+                    else:
+                        loop = get_main_loop()
+                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                            "client_id": client_id,
+                            "type": "notification",
+                            "notification_type": "warning", 
+                            "message": "No matching users found"
+                        }, client_id), loop)
+                        logger.debug(f"✅ Queued no matching users notification for {client_id}")
                 except Exception as e:
-                    logger.error(f"Failed to send no matching users notification to {client_id}: {str(e)}")
-                    # Mark connection as unhealthy
-                    if client_id in _connection_health:
-                        _connection_health[client_id]["failed_pings"] = _connection_health[client_id].get("failed_pings", 0) + 1
+                    logger.debug(f"Failed to send no matching users notification to {client_id}: {str(e)}")
+                    # Remove from active connections on error
+                    if client_id in active_connections:
+                        del active_connections[client_id]
+                    _connection_health.pop(client_id, None)
         
         # Add objectId and id to attendance updates if missing (memory optimized)
         if attendance_updates and len(attendance_updates) <= 20:  # Limit updates to prevent memory overload
@@ -790,20 +866,31 @@ def handle_future_completion(future, client_id):
             if client_id in active_connections:
                 websocket = active_connections[client_id]
                 try:
-                    # Send directly to client using run_coroutine_threadsafe
-                    loop = get_main_loop()
-                    asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
-                        "client_id": client_id,
-                        **detection
-                    }, client_id), loop)
-                    logger.debug(f"✅ Queued real-time detection for {client_id}: {detection.get('name')}")
+                    # Check WebSocket state before attempting to send
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name in ['DISCONNECTED', 'CLOSED']:
+                        logger.debug(f"WebSocket for {client_id} is {websocket.client_state.name}, skipping real-time detection")
+                        # Remove from active connections
+                        del active_connections[client_id]
+                        _connection_health.pop(client_id, None)
+                        break  # Exit the loop since client is disconnected
+                    else:
+                        # Send directly to client using run_coroutine_threadsafe
+                        loop = get_main_loop()
+                        asyncio.run_coroutine_threadsafe(_send_message_to_client(websocket, {
+                            "client_id": client_id,
+                            **detection
+                        }, client_id), loop)
+                        logger.debug(f"✅ Queued real-time detection for {client_id}: {detection.get('name')}")
                 except Exception as e:
-                    logger.error(f"Failed to send real-time detection to {client_id}: {str(e)}")
-                    # Mark connection as unhealthy
-                    if client_id in _connection_health:
-                        _connection_health[client_id]["failed_pings"] = _connection_health[client_id].get("failed_pings", 0) + 1
+                    logger.debug(f"Failed to send real-time detection to {client_id}: {str(e)}")
+                    # Remove from active connections on error
+                    if client_id in active_connections:
+                        del active_connections[client_id]
+                    _connection_health.pop(client_id, None)
+                    break  # Exit the loop since client is disconnected
             else:
                 logger.debug(f"Client {client_id} not in active connections, cannot send real-time detection")
+                break  # Exit the loop since client is not connected
         
         # Optimized attendance update broadcasting
         if attendance_updates and len(attendance_updates) <= 10:  # Limit to 10 updates
@@ -831,7 +918,20 @@ def handle_future_completion(future, client_id):
                     logger.error(f"Failed to queue attendance updates: {str(e)}")
             
     except Exception as e:
+        # Handle process pool termination errors differently
+        error_msg = str(e).lower()
+        if any(term in error_msg for term in ["terminated abruptly", "broken", "process pool"]):
+            logger.warning(f"Process pool issue for client {client_id}: {str(e)}")
+            # Don't queue error responses for process pool issues, just return
+            return
+        
         logger.error(f"Error handling future completion for client {client_id}: {str(e)}")
+        
+        # Only queue error responses for clients that are still connected
+        if client_id not in active_connections:
+            logger.debug(f"Client {client_id} disconnected, not queuing error response")
+            return
+            
         # Put error message in the websocket responses queue with sliding window clearing if full
         try:
             # Clear queue if full using sliding window approach
@@ -847,7 +947,7 @@ def handle_future_completion(future, client_id):
                 "no_face_count": 0
             })
             
-            # Also send immediate error notification via queue
+            # Also send immediate error notification via queue (only if still connected)
             if client_id in active_connections:
                 # Check again and clear if needed for notification
                 if websocket_responses_queue.qsize() >= MAX_QUEUE_SIZE:
