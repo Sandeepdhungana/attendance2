@@ -138,7 +138,7 @@ async def _monitor_memory():
             logger.info(f"Memory usage: {memory_mb:.1f} MB")
         
         # If memory usage is high, trigger aggressive cleanup
-        if memory_mb > 2500:  # 2500MB threshold
+        if memory_mb > 1500:  # 1500MB threshold
             logger.warning(f"High memory usage detected: {memory_mb:.1f} MB, triggering cleanup")
             await _cleanup_resources()
             gc.collect()
