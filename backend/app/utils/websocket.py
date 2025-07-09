@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 # Memory optimization constants
 MAX_QUEUE_SIZE = 50  # Reduced from 100 to prevent memory accumulation
 MAX_FUTURES_PER_CLIENT = 3  # Limit concurrent futures per client
-CLEANUP_INTERVAL = 60  # Cleanup every 60 seconds
-MEMORY_CHECK_INTERVAL = 30  # Check memory every 30 seconds
+CLEANUP_INTERVAL = 30  # Cleanup every 30 seconds (increased frequency)
+MEMORY_CHECK_INTERVAL = 30  # Check memory every 15 seconds (increased frequency)
 MAX_INACTIVE_CONNECTIONS = 100  # Max inactive connections to track
 PING_INTERVAL = 30  # Ping interval in seconds
 MAX_FAILED_PINGS = 3  # Max failed pings before cleanup
@@ -55,6 +55,34 @@ def signal_shutdown():
         _shutdown_event.set()
         logger.info("Shutdown signal sent to all background tasks")
 
+def _clear_queue_sliding_window_sync(queue, queue_name, max_size=50, clear_percentage=0.3):
+    """Clear queue using sliding window approach when full (synchronous version)"""
+    try:
+        current_size = queue.qsize()
+        if current_size >= max_size:
+            # Calculate how many items to remove (30% by default)
+            items_to_remove = max(1, int(current_size * clear_percentage))
+            
+            # Remove old items (FIFO)
+            removed_count = 0
+            for _ in range(items_to_remove):
+                try:
+                    queue.get_nowait()
+                    removed_count += 1
+                except:
+                    break
+            
+            logger.warning(f"{queue_name} queue full ({current_size} items), cleared {removed_count} old items (sliding window)")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error clearing {queue_name} queue: {str(e)}")
+        return False
+
+async def _clear_queue_sliding_window(queue, queue_name, max_size=50, clear_percentage=0.3):
+    """Clear queue using sliding window approach when full (async version)"""
+    return _clear_queue_sliding_window_sync(queue, queue_name, max_size, clear_percentage)
+
 async def _cleanup_resources():
     """Perform periodic cleanup of resources to prevent memory leaks"""
     global _last_cleanup, _connection_health
@@ -67,6 +95,11 @@ async def _cleanup_resources():
     logger.debug("Performing periodic resource cleanup")
     
     try:
+        # Clean up queues if they're getting full
+        processing_results_queue, websocket_responses_queue = get_queues()
+        await _clear_queue_sliding_window(processing_results_queue, "processing_results", MAX_QUEUE_SIZE)
+        await _clear_queue_sliding_window(websocket_responses_queue, "websocket_responses", MAX_QUEUE_SIZE)
+        
         # Cleanup expired futures
         pending_futures = get_pending_futures()
         expired_futures = []
@@ -138,8 +171,12 @@ async def _monitor_memory():
             logger.info(f"Memory usage: {memory_mb:.1f} MB")
         
         # If memory usage is high, trigger aggressive cleanup
-        if memory_mb > 1500:  # 1500MB threshold
-            logger.warning(f"High memory usage detected: {memory_mb:.1f} MB, triggering cleanup")
+        if memory_mb > 800:  # 800MB threshold (reduced for more aggressive cleanup)
+            logger.warning(f"High memory usage detected: {memory_mb:.1f} MB, triggering aggressive cleanup")
+            # Clear queues more aggressively when memory is high
+            processing_results_queue, websocket_responses_queue = get_queues()
+            await _clear_queue_sliding_window(processing_results_queue, "processing_results", MAX_QUEUE_SIZE // 2, 0.5)
+            await _clear_queue_sliding_window(websocket_responses_queue, "websocket_responses", MAX_QUEUE_SIZE // 2, 0.5)
             await _cleanup_resources()
             gc.collect()
             
@@ -307,11 +344,14 @@ async def process_queue():
             await _cleanup_resources()
             await _monitor_memory()
             
-            # Check if there are any items in the queue
-            if not processing_results_queue.empty():
+            items_processed = 0
+            max_items_per_batch = 10  # Process up to 10 items per batch
+            
+            # Process multiple items per iteration for better throughput
+            while not processing_results_queue.empty() and items_processed < max_items_per_batch:
                 try:
                     # Get the next item from the queue with timeout
-                    item = processing_results_queue.get(timeout=1)
+                    item = processing_results_queue.get(timeout=0.1)
 
                     # Process the item based on its type
                     if item.get("type") == "attendance_update":
@@ -320,13 +360,19 @@ async def process_queue():
 
                     # Mark the task as done
                     processing_results_queue.task_done()
+                    items_processed += 1
                     
                 except Exception as e:
                     if "Empty" not in str(e):  # Ignore timeout/empty queue errors
                         logger.error(f"Error processing queue item: {str(e)}")
+                    break
 
-            # Sleep for a short time to avoid busy waiting
-            await asyncio.sleep(0.1)
+            # Adaptive sleep: shorter if we processed items, longer if queue was empty
+            if items_processed > 0:
+                await asyncio.sleep(0.05)  # Shorter sleep when processing items
+                logger.debug(f"Processed {items_processed} queue items")
+            else:
+                await asyncio.sleep(0.2)  # Longer sleep when queue is empty
             
         except Exception as e:
             logger.error(f"Error in queue processing loop: {str(e)}")
@@ -349,17 +395,21 @@ async def process_websocket_responses():
             
             active_connections = get_active_connections()
             
-            # Check if there are any items in the queue
-            if not websocket_responses_queue.empty():
+            items_processed = 0
+            max_items_per_batch = 15  # Process up to 15 items per batch
+            
+            # Process multiple items per iteration for better throughput
+            while not websocket_responses_queue.empty() and items_processed < max_items_per_batch:
                 try:
                     # Get the next item from the queue with timeout
-                    item = websocket_responses_queue.get(timeout=1)
+                    item = websocket_responses_queue.get(timeout=0.1)
                     client_id = item.get("client_id")
 
                     # Check if the client is still connected
                     if client_id not in active_connections:
                         logger.debug(f"Skipping response to disconnected client {client_id}")
                         websocket_responses_queue.task_done()
+                        items_processed += 1
                         continue
 
                     websocket = active_connections[client_id]
@@ -502,13 +552,19 @@ async def process_websocket_responses():
 
                     # Mark the task as done
                     websocket_responses_queue.task_done()
+                    items_processed += 1
                     
                 except Exception as e:
                     if "Empty" not in str(e):  # Ignore timeout/empty queue errors
                         logger.error(f"Error processing websocket response item: {str(e)}")
+                    break
 
-            # Sleep for a short time to avoid busy waiting
-            await asyncio.sleep(0.1)
+            # Adaptive sleep: shorter if we processed items, longer if queue was empty
+            if items_processed > 0:
+                await asyncio.sleep(0.03)  # Very short sleep when processing items
+                logger.debug(f"Processed {items_processed} websocket response items")
+            else:
+                await asyncio.sleep(0.15)  # Longer sleep when queue is empty
             
         except Exception as e:
             logger.error(f"Error in websocket response processing loop: {str(e)}")
@@ -711,18 +767,20 @@ def handle_future_completion(future, client_id):
                 if "id" not in update and "employee_id" in update:
                     update["id"] = update["employee_id"]
 
-        # Put the results in the websocket responses queue (check queue size first)
+        # Put the results in the websocket responses queue (with sliding window clearing if full)
         try:
-            if websocket_responses_queue.qsize() < MAX_QUEUE_SIZE:
-                websocket_responses_queue.put({
-                    "client_id": client_id,
-                    "processed_users": processed_users[:10] if processed_users else [],  # Limit to 10 users
-                    "attendance_updates": attendance_updates[:20] if attendance_updates else [],  # Limit to 20 updates
-                    "last_recognized_users": {},  # Don't pass large data structures
-                    "no_face_count": no_face_count
-                })
-            else:
-                logger.warning(f"WebSocket response queue full, skipping response for client {client_id}")
+            # Clear queue if full using sliding window approach
+            if websocket_responses_queue.qsize() >= MAX_QUEUE_SIZE:
+                _clear_queue_sliding_window_sync(websocket_responses_queue, "websocket_responses", MAX_QUEUE_SIZE)
+            
+            # Now add the new item
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "processed_users": processed_users[:10] if processed_users else [],  # Limit to 10 users
+                "attendance_updates": attendance_updates[:20] if attendance_updates else [],  # Limit to 20 updates
+                "last_recognized_users": {},  # Don't pass large data structures
+                "no_face_count": no_face_count
+            })
         except Exception as e:
             logger.error(f"Failed to queue response for client {client_id}: {str(e)}")
         
@@ -759,40 +817,48 @@ def handle_future_completion(future, client_id):
             if actionable_updates:
                 # Queue for broadcasting instead of running immediately to prevent blocking
                 try:
-                    if processing_results_queue.qsize() < MAX_QUEUE_SIZE:
-                        processing_results_queue.put({
-                            "type": "attendance_update",
-                            "data": actionable_updates
-                        })
-                        logger.debug(f"Queued {len(actionable_updates)} attendance updates for broadcasting")
-                    else:
-                        logger.warning(f"Processing results queue full, skipping attendance broadcast")
+                    # Clear queue if full using sliding window approach
+                    if processing_results_queue.qsize() >= MAX_QUEUE_SIZE:
+                        _clear_queue_sliding_window_sync(processing_results_queue, "processing_results", MAX_QUEUE_SIZE)
+                    
+                    # Now add the new item
+                    processing_results_queue.put({
+                        "type": "attendance_update",
+                        "data": actionable_updates
+                    })
+                    logger.debug(f"Queued {len(actionable_updates)} attendance updates for broadcasting")
                 except Exception as e:
                     logger.error(f"Failed to queue attendance updates: {str(e)}")
             
     except Exception as e:
         logger.error(f"Error handling future completion for client {client_id}: {str(e)}")
-        # Put error message in the websocket responses queue with size check
+        # Put error message in the websocket responses queue with sliding window clearing if full
         try:
-            if websocket_responses_queue.qsize() < MAX_QUEUE_SIZE:
+            # Clear queue if full using sliding window approach
+            if websocket_responses_queue.qsize() >= MAX_QUEUE_SIZE:
+                _clear_queue_sliding_window_sync(websocket_responses_queue, "websocket_responses", MAX_QUEUE_SIZE)
+            
+            # Add error response
+            websocket_responses_queue.put({
+                "client_id": client_id,
+                "error": str(e)[:500],  # Limit error message length
+                "processed_users": [],
+                "attendance_updates": [],
+                "no_face_count": 0
+            })
+            
+            # Also send immediate error notification via queue
+            if client_id in active_connections:
+                # Check again and clear if needed for notification
+                if websocket_responses_queue.qsize() >= MAX_QUEUE_SIZE:
+                    _clear_queue_sliding_window_sync(websocket_responses_queue, "websocket_responses", MAX_QUEUE_SIZE)
+                
                 websocket_responses_queue.put({
                     "client_id": client_id,
-                    "error": str(e)[:500],  # Limit error message length
-                    "processed_users": [],
-                    "attendance_updates": [],
-                    "no_face_count": 0
+                    "type": "notification",
+                    "notification_type": "error",
+                    "message": f"Error processing image: {str(e)[:100]}"  # Limit error message
                 })
-                
-                # Also send immediate error notification via queue
-                if client_id in active_connections:
-                    websocket_responses_queue.put({
-                        "client_id": client_id,
-                        "type": "notification",
-                        "notification_type": "error",
-                        "message": f"Error processing image: {str(e)[:100]}"  # Limit error message
-                    })
-            else:
-                logger.warning(f"Queue full, cannot send error response for client {client_id}")
         except Exception as queue_error:
             logger.error(f"Failed to queue error response: {str(queue_error)}")
             
