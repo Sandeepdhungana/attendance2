@@ -42,31 +42,59 @@ def create_new_process_pool():
         logger.error(f"Error creating new process pool: {str(e)}")
         return None
 
-# Add at the top of the file after imports
+# Memory-optimized EmployeeCache with size limits and automatic cleanup
 class EmployeeCache:
     _cache = {}
     _last_clear = None
-    _cache_ttl = 3600  # 1 hour in seconds
+    _cache_ttl = 1800  # 30 minutes (reduced from 1 hour)
+    _max_cache_size = 500  # Limit cache size to prevent memory overflow
+    _access_count = {}  # Track access frequency for LRU eviction
+    
+    @classmethod
+    def _cleanup_cache(cls):
+        """Perform LRU cleanup when cache is too large"""
+        if len(cls._cache) <= cls._max_cache_size:
+            return
+            
+        # Sort by access count (least recently used first)
+        sorted_items = sorted(cls._access_count.items(), key=lambda x: x[1])
+        
+        # Remove least used items
+        items_to_remove = len(cls._cache) - cls._max_cache_size
+        for employee_id, _ in sorted_items[:items_to_remove]:
+            cls._cache.pop(employee_id, None)
+            cls._access_count.pop(employee_id, None)
+        
+        logger.debug(f"LRU cleanup: removed {items_to_remove} employees from cache")
+    
+    @classmethod
+    def _update_access(cls, employee_id: str):
+        """Update access count for LRU tracking"""
+        cls._access_count[employee_id] = cls._access_count.get(employee_id, 0) + 1
     
     @classmethod
     def get_employee(cls, employee_id: str):
-        """Get employee from cache or database"""
+        """Get employee from cache or database with memory optimization"""
         current_time = datetime.now()
         
-        # Clear cache if needed
+        # Clear cache if TTL expired
         if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
             cls._cache.clear()
+            cls._access_count.clear()
             cls._last_clear = current_time
             
         # Check cache first
         if employee_id in cls._cache:
+            cls._update_access(employee_id)
             return cls._cache[employee_id]
             
         # If not in cache, query database
         try:
             employee = query("Employee", where={"employee_id": employee_id}, limit=1)
-            if employee:
+            if employee and len(employee) > 0:
                 cls._cache[employee_id] = employee[0]
+                cls._update_access(employee_id)
+                cls._cleanup_cache()  # Ensure cache size limits
                 return employee[0]
         except Exception as e:
             logger.error(f"Error querying employee {employee_id}: {str(e)}")
@@ -75,12 +103,17 @@ class EmployeeCache:
 
     @classmethod
     def get_employees_batch(cls, employee_ids: List[str]):
-        """Get multiple employees in a single query"""
+        """Get multiple employees with memory optimization"""
+        if len(employee_ids) > 50:  # Limit batch size
+            logger.warning(f"Large employee batch requested ({len(employee_ids)}), limiting to 50")
+            employee_ids = employee_ids[:50]
+            
         current_time = datetime.now()
         
-        # Clear cache if needed
+        # Clear cache if TTL expired
         if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
             cls._cache.clear()
+            cls._access_count.clear()
             cls._last_clear = current_time
             
         # Find which IDs we need to query
@@ -88,38 +121,56 @@ class EmployeeCache:
         
         if missing_ids:
             try:
-                # Query all missing employees at once
+                # Limit query size
+                if len(missing_ids) > 50:
+                    missing_ids = missing_ids[:50]
+                    
+                # Query missing employees
                 employees = query("Employee", where={"employee_id": {"$in": missing_ids}})
                 
                 # Update cache with new results
                 for employee in employees:
                     if employee.get("employee_id"):
                         cls._cache[employee["employee_id"]] = employee
+                        cls._update_access(employee["employee_id"])
+                
+                cls._cleanup_cache()  # Ensure cache size limits
+                
             except Exception as e:
                 logger.error(f"Error batch querying employees: {str(e)}")
                 return []
         
-        # Return all requested employees from cache
+        # Update access counts for retrieved employees
+        for eid in employee_ids:
+            if eid in cls._cache:
+                cls._update_access(eid)
+        
+        # Return requested employees from cache
         return [cls._cache.get(eid) for eid in employee_ids if cls._cache.get(eid)]
 
     @classmethod
     def get_all_employees(cls):
-        """Get all employees from cache or database"""
+        """Get all employees with memory limits"""
         current_time = datetime.now()
         
-        # Clear cache if needed
+        # Clear cache if TTL expired
         if cls._last_clear is None or (current_time - cls._last_clear).total_seconds() > cls._cache_ttl:
             cls._cache.clear()
+            cls._access_count.clear()
             cls._last_clear = current_time
             
-        # If cache is empty, query all employees
+        # If cache is empty, query employees with limit
         if not cls._cache:
             try:
-                employees = query("Employee")
-                # Update cache with all employees
+                # Limit number of employees to prevent memory issues
+                employees = query("Employee", limit=cls._max_cache_size)
+                
+                # Update cache with employees
                 for employee in employees:
                     if employee.get("employee_id"):
                         cls._cache[employee["employee_id"]] = employee
+                        cls._update_access(employee["employee_id"])
+                        
             except Exception as e:
                 logger.error(f"Error querying all employees: {str(e)}")
                 return []
@@ -130,9 +181,97 @@ class EmployeeCache:
     @classmethod
     def remove_employee(cls, employee_id: str):
         """Remove employee from cache"""
-        if employee_id in cls._cache:
-            del cls._cache[employee_id]
+        cls._cache.pop(employee_id, None)
+        cls._access_count.pop(employee_id, None)
+    
+    @classmethod
+    def clear_cache(cls):
+        """Manually clear the entire cache"""
+        cls._cache.clear()
+        cls._access_count.clear()
+        cls._last_clear = datetime.now()
+        logger.debug("Employee cache manually cleared")
+    
+    @classmethod
+    def get_cache_stats(cls):
+        """Get cache statistics for monitoring"""
+        return {
+            "size": len(cls._cache),
+            "max_size": cls._max_cache_size,
+            "ttl_seconds": cls._cache_ttl,
+            "last_clear": cls._last_clear
+        }
 
+
+# Memory monitoring endpoint
+@router.get("/memory-stats")
+async def get_memory_stats():
+    """Get memory usage statistics for monitoring"""
+    try:
+        import psutil
+        import os
+        
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        
+        # Get connection statistics
+        active_connections = get_active_connections()
+        pending_futures = get_pending_futures()
+        client_pending_tasks, _ = get_client_tasks()
+        processing_results_queue, websocket_responses_queue = get_queues()
+        
+        # Get cache statistics
+        cache_stats = EmployeeCache.get_cache_stats()
+        
+        return {
+            "memory": {
+                "rss_mb": round(memory_info.rss / 1024 / 1024, 2),
+                "vms_mb": round(memory_info.vms / 1024 / 1024, 2),
+                "percent": process.memory_percent()
+            },
+            "connections": {
+                "active_count": len(active_connections),
+                "pending_futures": len(pending_futures),
+                "client_tasks": len(client_pending_tasks)
+            },
+            "queues": {
+                "processing_results_size": processing_results_queue.qsize(),
+                "websocket_responses_size": websocket_responses_queue.qsize()
+            },
+            "cache": cache_stats,
+            "system": {
+                "cpu_count": psutil.cpu_count(),
+                "available_memory_mb": round(psutil.virtual_memory().available / 1024 / 1024, 2)
+            }
+        }
+    except ImportError:
+        return {"error": "psutil not available for memory monitoring"}
+    except Exception as e:
+        return {"error": f"Failed to get memory stats: {str(e)}"}
+
+# Manual cleanup endpoint for testing/maintenance
+@router.post("/cleanup-resources")
+async def manual_cleanup():
+    """Manually trigger resource cleanup"""
+    try:
+        from app.utils.websocket import _cleanup_resources
+        from app.dependencies import perform_global_cleanup
+        
+        # Trigger cleanup
+        await _cleanup_resources()
+        perform_global_cleanup()
+        EmployeeCache.clear_cache()
+        
+        # Force garbage collection
+        import gc
+        collected = gc.collect()
+        
+        return {
+            "status": "success",
+            "message": f"Cleanup completed, garbage collector freed {collected} objects"
+        }
+    except Exception as e:
+        return {"error": f"Cleanup failed: {str(e)}"}
 
 @router.websocket("/ws/attendance")
 async def websocket_endpoint(websocket: WebSocket):
@@ -860,21 +999,50 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
     finally:
-        # Clean up
-        active_connections.pop(client_id, None)
+        # Comprehensive cleanup for disconnected client
+        try:
+            # Remove from active connections
+            active_connections.pop(client_id, None)
 
-        # Clean up pending tasks
-        with client_pending_tasks_lock:
-            if client_id in client_pending_tasks:
-                logger.info(
-                    f"Cleaning up {client_pending_tasks[client_id]} pending tasks for client {client_id}")
-                del client_pending_tasks[client_id]
+            # Clean up pending tasks
+            with client_pending_tasks_lock:
+                if client_id in client_pending_tasks:
+                    pending_count = client_pending_tasks.get(client_id, 0)
+                    if pending_count > 0:
+                        logger.info(f"Cleaning up {pending_count} pending tasks for client {client_id}")
+                    del client_pending_tasks[client_id]
 
-        # Clean up any pending futures for this client
-        pending_futures = get_pending_futures()
-        for future, future_client_id in list(pending_futures.items()):
-            if future_client_id == client_id:
-                del pending_futures[future]
+            # Clean up any pending futures for this client
+            pending_futures = get_pending_futures()
+            futures_to_remove = []
+            for future, future_client_id in list(pending_futures.items()):
+                if future_client_id == client_id:
+                    futures_to_remove.append(future)
+                    # Cancel the future if it's not done
+                    if not future.done():
+                        future.cancel()
+            
+            # Remove futures from pending list
+            for future in futures_to_remove:
+                pending_futures.pop(future, None)
+            
+            if futures_to_remove:
+                logger.debug(f"Cancelled and removed {len(futures_to_remove)} futures for client {client_id}")
 
-        logger.info(
-            f"WebSocket connection {client_id} closed. Total connections: {len(active_connections)}")
+            # Clean up connection health tracking
+            from app.utils.websocket import _connection_health
+            _connection_health.pop(client_id, None)
+            
+            # Trigger cleanup if we have too many disconnections
+            if len(active_connections) % 10 == 0:  # Every 10 disconnections
+                from app.utils.websocket import _cleanup_resources
+                from app.dependencies import perform_global_cleanup
+                import asyncio
+                
+                # Schedule cleanup to run soon
+                asyncio.create_task(_cleanup_resources())
+                
+            logger.info(f"WebSocket connection {client_id} cleaned up. Total connections: {len(active_connections)}")
+            
+        except Exception as cleanup_error:
+            logger.error(f"Error during client cleanup for {client_id}: {str(cleanup_error)}")
