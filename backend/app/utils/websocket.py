@@ -166,13 +166,22 @@ async def _monitor_memory():
         memory_info = process.memory_info()
         memory_mb = memory_info.rss / 1024 / 1024
         
-        # Log memory usage every few checks
-        if int(current_time) % (MEMORY_CHECK_INTERVAL * 5) == 0:
-            logger.info(f"Memory usage: {memory_mb:.1f} MB")
+        # Get additional system info for better monitoring
+        active_connections = get_active_connections()
+        pending_futures = get_pending_futures()
+        
+        # Log memory usage every few checks with connection info
+        if int(current_time) % (MEMORY_CHECK_INTERVAL * 4) == 0:
+            logger.info(f"Memory usage: {memory_mb:.1f} MB | Active connections: {len(active_connections)} | Pending futures: {len(pending_futures)}")
+        
+        # Multi-device usage detection and warnings
+        if len(active_connections) >= 3:
+            logger.info(f"Multi-device usage detected: {len(active_connections)} active connections")
         
         # If memory usage is high, trigger aggressive cleanup
         if memory_mb > 800:  # 800MB threshold (reduced for more aggressive cleanup)
             logger.warning(f"High memory usage detected: {memory_mb:.1f} MB, triggering aggressive cleanup")
+            logger.info(f"Current load: {len(active_connections)} connections, {len(pending_futures)} pending futures")
             # Clear queues more aggressively when memory is high
             processing_results_queue, websocket_responses_queue = get_queues()
             await _clear_queue_sliding_window(processing_results_queue, "processing_results", MAX_QUEUE_SIZE // 2, 0.5)

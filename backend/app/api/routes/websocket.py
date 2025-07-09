@@ -294,15 +294,24 @@ async def websocket_endpoint(websocket: WebSocket):
     # Generate unique client ID
     client_id = str(uuid.uuid4())
     active_connections = get_active_connections()
-    active_connections[client_id] = websocket
-
-    logger.info(
-        f"New WebSocket connection {client_id}. Total connections: {len(active_connections)}")
-
-    # Initialize pending tasks counter for this client
     client_pending_tasks, client_pending_tasks_lock = get_client_tasks()
-    with client_pending_tasks_lock:
-        client_pending_tasks[client_id] = 0
+
+    # Add client to connections and initialize pending tasks
+    active_connections[client_id] = websocket
+    client_pending_tasks[client_id] = 0
+
+    # Enhanced logging for multi-device scenarios
+    connection_count = len(active_connections)
+    logger.info(f"New WebSocket connection {client_id}. Total connections: {connection_count}")
+    
+    # Warn about multi-device usage that could cause memory pressure
+    if connection_count >= 3:
+        logger.warning(f"High connection count detected: {connection_count} active connections. Monitor memory usage.")
+    elif connection_count >= 5:
+        logger.error(f"Very high connection count: {connection_count} active connections. Consider implementing connection limits.")
+
+    # Initialize cleanup counter for this client
+    cleanup_counter = 0
 
     # Get thread pool for I/O bound tasks
     thread_pool = get_thread_pool()
@@ -1042,7 +1051,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Schedule cleanup to run soon
                 asyncio.create_task(_cleanup_resources())
                 
-            logger.info(f"WebSocket connection {client_id} cleaned up. Total connections: {len(active_connections)}")
+            # Enhanced logging for multi-device scenarios
+            remaining_connections = len(active_connections)
+            logger.info(f"WebSocket connection {client_id} cleaned up. Total connections: {remaining_connections}")
+            
+            # Track connection patterns for multi-device usage
+            if remaining_connections == 0:
+                logger.info("All WebSocket connections closed. System ready for new sessions.")
+            elif remaining_connections >= 5:
+                logger.warning(f"High connection count remains: {remaining_connections} active connections after cleanup.")
+            elif remaining_connections >= 2:
+                logger.info(f"Multi-device session: {remaining_connections} connections remaining.")
             
         except Exception as cleanup_error:
             logger.error(f"Error during client cleanup for {client_id}: {str(cleanup_error)}")

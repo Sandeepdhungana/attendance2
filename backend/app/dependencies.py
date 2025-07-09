@@ -14,10 +14,13 @@ logger = logging.getLogger(__name__)
 
 # Determine optimal number of workers based on CPU count
 CPU_COUNT = cpu_count()
-PROCESS_WORKERS = max(CPU_COUNT - 1, 1)  # Leave one CPU for system tasks
+# CRITICAL MEMORY FIX: Reduce process workers to prevent memory exhaustion
+# Each worker loads ~1.5GB of face recognition models, so limit to max 2 workers
+# This prevents "process terminated abruptly" errors from memory overload
+PROCESS_WORKERS = min(max(CPU_COUNT // 2, 1), 2)  # Use half CPUs, max 2 workers to prevent memory exhaustion
 THREAD_WORKERS = min(CPU_COUNT * 2, 8)  # Limit max threads to prevent resource exhaustion
 
-logger.info(f"System has {CPU_COUNT} CPUs, using {PROCESS_WORKERS} process workers and {THREAD_WORKERS} thread workers")
+logger.info(f"System has {CPU_COUNT} CPUs, using {PROCESS_WORKERS} process workers (memory-optimized for face recognition) and {THREAD_WORKERS} thread workers")
 
 # Memory optimization constants
 MAX_QUEUE_SIZE = 50  # Reduced from 100 to prevent memory accumulation
@@ -175,6 +178,7 @@ def get_face_recognition() -> FaceRecognition:
 def get_process_pool():
     """
     Get the current process pool. If the pool is broken, create a new one.
+    Memory-optimized to prevent process termination from face recognition model loading.
     """
     global process_pool
     
@@ -185,16 +189,16 @@ def get_process_pool():
         try:
             # Check if the pool is broken by submitting a simple task
             if hasattr(process_pool, '_broken') and process_pool._broken:
-                logger.warning("Process pool is broken, creating a new one")
+                logger.warning("Process pool is broken, creating a new memory-optimized one")
                 # Close the old pool (it's already broken, so just clean up)
                 try:
                     process_pool.shutdown(wait=False)
                 except Exception as e:
                     logger.warning(f"Error shutting down broken process pool: {str(e)}")
                 
-                # Create a new process pool
+                # Create a new process pool with memory-safe worker count
                 process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=PROCESS_WORKERS)
-                logger.info("Created new process pool")
+                logger.info(f"Created new process pool with {PROCESS_WORKERS} workers (memory-optimized)")
         except Exception as e:
             logger.error(f"Error checking process pool: {str(e)}")
             # If we can't check the pool, assume it's broken and create a new one
@@ -203,9 +207,9 @@ def get_process_pool():
             except:
                 pass
             
-            # Create a new process pool
+            # Create a new process pool with memory-safe worker count
             process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=PROCESS_WORKERS)
-            logger.info("Created new process pool after error")
+            logger.info(f"Created new process pool after error with {PROCESS_WORKERS} workers (memory-optimized)")
     
     return process_pool
 
