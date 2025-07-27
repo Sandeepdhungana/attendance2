@@ -440,6 +440,113 @@ def send_early_exit_notification(employee_data: dict, employee_email: Optional[s
         employee_email=employee_email
     )
 
+def send_otp_email(
+    email: str,
+    otp_code: str,
+    employee_name: str = "",
+    expires_minutes: int = 15
+) -> dict:
+    """
+    Send OTP code for password reset/setup.
+    
+    Args:
+        email: Email address to send OTP to
+        otp_code: The 6-digit OTP code
+        employee_name: Name of the employee (optional)
+        expires_minutes: How many minutes the OTP is valid for
+        
+    Returns:
+        dict: Result of the email sending operation
+    """
+    greeting = f"Hello {employee_name}," if employee_name else "Hello,"
+    
+    subject = f"Password Reset OTP - {COMPANY_NAME}"
+    
+    template_vars = {
+        'greeting': greeting,
+        'content': f'''
+            <p>You have requested to reset/set your password for the {COMPANY_NAME} attendance system.</p>
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center;">
+                <h2 style="color: #2c3e50; margin: 0;">Your OTP Code</h2>
+                <div style="font-size: 36px; font-weight: bold; color: #3498db; letter-spacing: 8px; margin: 15px 0;">
+                    {otp_code}
+                </div>
+                <p style="color: #7f8c8d; margin: 0;">This code will expire in {expires_minutes} minutes</p>
+            </div>
+            <p><strong>Security Notice:</strong></p>
+            <ul>
+                <li>This OTP is valid for {expires_minutes} minutes only</li>
+                <li>Do not share this code with anyone</li>
+                <li>If you didn't request this password reset, please ignore this email</li>
+                <li>For security reasons, this code can only be used once</li>
+            </ul>
+            <p>If you need assistance, please contact the HR department.</p>
+        ''',
+        'company_name': COMPANY_NAME,
+        'contact_info': f'Email: {HR_EMAIL}'
+    }
+    
+    try:
+        return send_template_email(
+            recipient_emails=[email],
+            subject=subject,
+            template_variables=template_vars
+        )
+    except Exception as e:
+        logger.error(f"Error sending OTP email: {str(e)}", exc_info=True)
+        return {"success": False, "message": f"Failed to send OTP email: {str(e)}"}
+
+
+def send_password_reset_success_email(
+    email: str,
+    employee_name: str = ""
+) -> dict:
+    """
+    Send confirmation email after successful password reset.
+    
+    Args:
+        email: Email address to send confirmation to
+        employee_name: Name of the employee (optional)
+        
+    Returns:
+        dict: Result of the email sending operation
+    """
+    greeting = f"Hello {employee_name}," if employee_name else "Hello,"
+    
+    subject = f"Password Reset Successful - {COMPANY_NAME}"
+    
+    template_vars = {
+        'greeting': greeting,
+        'content': f'''
+            <p>Your password has been successfully reset/set for the {COMPANY_NAME} attendance system.</p>
+            <div style="background-color: #d4edda; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
+                <p style="margin: 0; color: #155724;"><strong>✓ Password Reset Successful</strong></p>
+                <p style="margin: 5px 0 0 0; color: #155724;">You can now log in with your new password.</p>
+            </div>
+            <p><strong>Security Recommendations:</strong></p>
+            <ul>
+                <li>Keep your password secure and don't share it with anyone</li>
+                <li>Use a strong, unique password</li>
+                <li>Log out of your account when using shared computers</li>
+            </ul>
+            <p>If you didn't make this change, please contact HR immediately.</p>
+            <p>You can now access the attendance system using your new credentials.</p>
+        ''',
+        'company_name': COMPANY_NAME,
+        'contact_info': f'Email: {HR_EMAIL}'
+    }
+    
+    try:
+        return send_template_email(
+            recipient_emails=[email],
+            subject=subject,
+            template_variables=template_vars
+        )
+    except Exception as e:
+        logger.error(f"Error sending password reset success email: {str(e)}", exc_info=True)
+        return {"success": False, "message": f"Failed to send confirmation email: {str(e)}"}
+
+
 def send_welcome_email(
     employee_data: dict,
     employee_email: Optional[str] = None,

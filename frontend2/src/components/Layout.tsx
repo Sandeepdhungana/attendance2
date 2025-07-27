@@ -25,6 +25,9 @@ import {
   Paper,
   Container,
   Chip,
+  Menu,
+  MenuItem,
+  ListItemAvatar,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -44,8 +47,11 @@ import {
   Wifi as WifiIcon,
   ChevronLeft as ChevronLeftIcon,
   FilterList as FilterListIcon,
+  Logout as LogoutIcon,
+  Person as PersonIcon,
 } from '@mui/icons-material';
 import { useWebSocket } from '../App';
+import { useAuth } from '../contexts/AuthContext';
 
 const drawerWidth = 260;
 
@@ -55,11 +61,11 @@ interface LayoutProps {
 
 // Navigation menu structure
 const menuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
-  { text: 'Register Employee', icon: <PersonAddIcon />, path: '/register' },
-  { text: 'Attendance', icon: <AccessTimeIcon />, path: '/attendance' },
-  { text: 'Filter & Analytics', icon: <FilterListIcon />, path: '/filter' },
-  { text: 'Employee Shifts', icon: <SwapHorizIcon />, path: '/employee-shifts' },
+  { text: 'Dashboard', icon: <DashboardIcon />, path: '/', adminOnly: false },
+  { text: 'Register Employee', icon: <PersonAddIcon />, path: '/register', adminOnly: true },
+  { text: 'Attendance', icon: <AccessTimeIcon />, path: '/attendance', adminOnly: true },
+  { text: 'Filter & Analytics', icon: <FilterListIcon />, path: '/filter', adminOnly: true },
+  { text: 'Employee Shifts', icon: <SwapHorizIcon />, path: '/employee-shifts', adminOnly: true },
 ];
 
 const adminItems = [
@@ -71,9 +77,11 @@ const adminItems = [
 export default function Layout({ children }: LayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
   const location = useLocation();
   const theme = useTheme();
   const { isConnected } = useWebSocket();
+  const { state: authState, logout } = useAuth();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const isSmallScreen = useMediaQuery(theme.breakpoints.down('sm'));
@@ -120,6 +128,42 @@ export default function Layout({ children }: LayoutProps) {
   const handleAdminToggle = () => {
     setAdminOpen(!adminOpen);
   };
+
+  const handleUserMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setUserMenuAnchor(event.currentTarget);
+  };
+
+  const handleUserMenuClose = () => {
+    setUserMenuAnchor(null);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      handleUserMenuClose();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
+  // Filter menu items based on admin status
+  const filteredMenuItems = useMemo(() => {
+    const isAdmin = authState.user?.is_admin || false;
+    
+    return menuItems.filter(item => {
+      // Show all items to admin users
+      if (isAdmin) {
+        return true;
+      }
+      // Non-admin users can only see Dashboard
+      return !item.adminOnly;
+    });
+  }, [authState.user?.is_admin]);
+
+  const filteredAdminItems = useMemo(() => {
+    // Only show admin items if user is admin
+    return authState.user?.is_admin ? adminItems : [];
+  }, [authState.user?.is_admin]);
 
   const NavItem = ({ item, selected }: { item: typeof menuItems[0], selected: boolean }) => (
     <ListItem disablePadding sx={{ mb: 0.5 }}>
@@ -217,7 +261,7 @@ export default function Layout({ children }: LayoutProps) {
       
       <Box sx={{ flexGrow: 1, overflowY: 'auto', px: 1, py: 1.5 }}>
         <List>
-          {menuItems.map((item) => (
+          {filteredMenuItems.map((item) => (
             <NavItem 
               key={item.text} 
               item={item} 
@@ -225,37 +269,41 @@ export default function Layout({ children }: LayoutProps) {
             />
           ))}
           
-          <ListItem disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton 
-              onClick={handleAdminToggle}
-              sx={{
-                borderRadius: 2,
-                py: 1.2,
-                transition: 'all 0.2s',
-                '&:hover': {
-                  bgcolor: alpha(theme.palette.primary.main, 0.08),
-                },
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>
-                <SettingsIcon />
-              </ListItemIcon>
-              <ListItemText primary="Admin Settings" />
-              {adminOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-            </ListItemButton>
-          </ListItem>
-          
-          <Collapse in={adminOpen} timeout="auto" unmountOnExit>
-            <List component="div" disablePadding sx={{ pl: 2 }}>
-              {adminItems.map((item) => (
-                <NavItem 
-                  key={item.text} 
-                  item={item} 
-                  selected={location.pathname === item.path} 
-                />
-              ))}
-            </List>
-          </Collapse>
+          {filteredAdminItems.length > 0 && (
+            <>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton 
+                  onClick={handleAdminToggle}
+                  sx={{
+                    borderRadius: 2,
+                    py: 1.2,
+                    transition: 'all 0.2s',
+                    '&:hover': {
+                      bgcolor: alpha(theme.palette.primary.main, 0.08),
+                    },
+                  }}
+                >
+                  <ListItemIcon sx={{ minWidth: 40 }}>
+                    <SettingsIcon />
+                  </ListItemIcon>
+                  <ListItemText primary="Admin Settings" />
+                  {adminOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </ListItemButton>
+              </ListItem>
+              
+              <Collapse in={adminOpen} timeout="auto" unmountOnExit>
+                <List component="div" disablePadding sx={{ pl: 2 }}>
+                  {filteredAdminItems.map((item) => (
+                    <NavItem 
+                      key={item.text} 
+                      item={item} 
+                      selected={location.pathname === item.path} 
+                    />
+                  ))}
+                </List>
+              </Collapse>
+            </>
+          )}
         </List>
       </Box>
       
@@ -344,6 +392,7 @@ export default function Layout({ children }: LayoutProps) {
             <Tooltip title="Account">
               <IconButton 
                 color="inherit"
+                onClick={handleUserMenuOpen}
                 sx={{
                   bgcolor: alpha(theme.palette.primary.main, 0.1),
                   '&:hover': {
@@ -354,6 +403,49 @@ export default function Layout({ children }: LayoutProps) {
                 <AccountCircleIcon />
               </IconButton>
             </Tooltip>
+            
+            <Menu
+              anchorEl={userMenuAnchor}
+              open={Boolean(userMenuAnchor)}
+              onClose={handleUserMenuClose}
+              PaperProps={{
+                sx: {
+                  mt: 1,
+                  minWidth: 200,
+                  borderRadius: 2,
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
+                }
+              }}
+            >
+              <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
+                <Typography variant="subtitle2" fontWeight="bold">
+                  {authState.user?.email}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Employee ID: {authState.user?.employee_id}
+                </Typography>
+                <Chip 
+                  label={authState.user?.is_admin ? 'Admin' : 'Employee'} 
+                  size="small" 
+                  color={authState.user?.is_admin ? 'primary' : 'default'}
+                  sx={{ mt: 0.5 }}
+                />
+              </Box>
+              
+              <MenuItem onClick={handleUserMenuClose}>
+                <ListItemIcon>
+                  <PersonIcon fontSize="small" />
+                </ListItemIcon>
+                Profile
+              </MenuItem>
+              
+              <MenuItem onClick={handleLogout}>
+                <ListItemIcon>
+                  <LogoutIcon fontSize="small" />
+                </ListItemIcon>
+                Logout
+              </MenuItem>
+            </Menu>
           </Box>
         </Toolbar>
         {isLoading && <LinearProgress sx={{ height: 2 }} />}

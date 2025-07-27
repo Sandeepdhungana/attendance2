@@ -97,6 +97,49 @@ class Employee(BaseModel):
     def __init__(self):
         super().__init__("Employee")
         self.created_at = get_local_time()
+        
+    def find_by_email(self, email):
+        """Find employee by email"""
+        from app.database import query
+        employees = query("Employee", where={"email": email}, limit=1)
+        return employees[0] if employees else None
+        
+    def find_by_employee_id(self, employee_id):
+        """Find employee by employee_id"""
+        from app.database import query
+        employees = query("Employee", where={"employee_id": employee_id}, limit=1)
+        return employees[0] if employees else None
+        
+    def create_user(self, email, password_hash, employee_id, is_admin=False, name=""):
+        """Create a new employee with authentication data"""
+        current_time = get_local_time()
+        employee_data = {
+            "employee_id": employee_id,
+            "name": name,
+            "email": email,
+            "password_hash": password_hash,
+            "is_admin": is_admin,
+            "is_active": True,
+            "created_at": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            },
+            "updated_at": {
+                "__type": "Date", 
+                "iso": current_time.isoformat()
+            }
+        }
+        return self.create(employee_data)
+        
+    def update_last_login(self, employee_id):
+        """Update employee's last login time"""
+        current_time = get_local_time()
+        self.update(employee_id, {
+            "last_login": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            }
+        })
 
 
 class Attendance(BaseModel):
@@ -408,3 +451,182 @@ class TimezoneConfig(BaseModel):
 class Shift(BaseModel):
     def __init__(self):
         super().__init__("Shift")
+
+
+# DEPRECATED: User class functionality moved to Employee class
+# All authentication and user management is now handled by Employee class
+class User(BaseModel):
+    def __init__(self):
+        super().__init__("User")
+        self.created_at = get_local_time()
+        import warnings
+        warnings.warn("User class is deprecated. Use Employee class instead.", DeprecationWarning, stacklevel=2)
+
+
+class PasswordReset(BaseModel):
+    def __init__(self):
+        super().__init__("PasswordReset")
+        self.created_at = get_local_time()
+        
+    def create_otp(self, email, otp_code, expires_at):
+        """Create a new password reset OTP"""
+        current_time = get_local_time()
+        otp_data = {
+            "email": email,
+            "otp_code": otp_code,
+            "is_used": False,
+            "expires_at": {
+                "__type": "Date",
+                "iso": expires_at.isoformat()
+            },
+            "created_at": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            }
+        }
+        return self.create(otp_data)
+        
+    def find_valid_otp(self, email, otp_code):
+        """Find a valid, unused OTP for the given email"""
+        from app.database import query
+        from app.utils.time_utils import get_local_time
+        
+        # First, find OTP by email and code only
+        otps = query("PasswordReset", where={
+            "email": email,
+            "otp_code": otp_code,
+            "is_used": False
+        }, limit=10)  # Get multiple to check expiry manually
+        
+        if not otps:
+            return None
+            
+        # Check expiry manually since Back4App date comparison might be tricky
+        current_time = get_local_time()
+        for otp in otps:
+            expires_at = otp.get("expires_at")
+            if expires_at:
+                # Handle Back4App date format
+                if isinstance(expires_at, dict) and "iso" in expires_at:
+                    expires_iso = expires_at["iso"]
+                else:
+                    expires_iso = expires_at
+                
+                try:
+                    from dateutil.parser import parse
+                    expires_datetime = parse(expires_iso)
+                    if expires_datetime > current_time:
+                        return otp
+                except Exception as e:
+                    print(f"Error parsing expiry date: {e}")
+                    continue
+        
+        return None
+        
+    def mark_otp_used(self, otp_id):
+        """Mark an OTP as used"""
+        current_time = get_local_time()
+        return self.update(otp_id, {
+            "is_used": True,
+            "used_at": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            }
+        })
+        
+    def cleanup_expired_otps(self):
+        """Clean up expired OTPs (can be called periodically)"""
+        from app.database import query
+        from app.utils.time_utils import get_local_time
+        from dateutil.parser import parse
+        
+        # Get all OTPs and check expiry manually
+        all_otps = query("PasswordReset", limit=1000)
+        current_time = get_local_time()
+        
+        for otp in all_otps:
+            expires_at = otp.get("expires_at")
+            if expires_at:
+                try:
+                    # Handle Back4App date format
+                    if isinstance(expires_at, dict) and "iso" in expires_at:
+                        expires_iso = expires_at["iso"]
+                    else:
+                        expires_iso = expires_at
+                    
+                    expires_datetime = parse(expires_iso)
+                    if expires_datetime < current_time:
+                        self.delete(otp["objectId"])
+                except Exception as e:
+                    print(f"Error parsing expiry date during cleanup: {e}")
+                    continue
+
+
+class RefreshToken(BaseModel):
+    def __init__(self):
+        super().__init__("RefreshToken")
+        self.created_at = get_local_time()
+        
+    def create_token(self, user_id, token_hash, expires_at):
+        """Create a new refresh token"""
+        current_time = get_local_time()
+        token_data = {
+            "user_id": user_id,
+            "token_hash": token_hash,
+            "expires_at": {
+                "__type": "Date",
+                "iso": expires_at.isoformat()
+            },
+            "is_active": True,
+            "created_at": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            }
+        }
+        return self.create(token_data)
+        
+    def find_by_token(self, token_hash):
+        """Find refresh token by token hash"""
+        tokens = self.query(where={"token_hash": token_hash, "is_active": True})
+        return tokens[0] if tokens else None
+        
+    def revoke_token(self, token_id):
+        """Revoke a refresh token"""
+        current_time = get_local_time()
+        return self.update(token_id, {
+            "is_active": False,
+            "updated_at": {
+                "__type": "Date",
+                "iso": current_time.isoformat()
+            }
+        })
+        
+    def revoke_all_user_tokens(self, user_id):
+        """Revoke all refresh tokens for a user"""
+        tokens = self.query(where={"user_id": user_id, "is_active": True})
+        current_time = get_local_time()
+        
+        for token in tokens:
+            self.update(token["objectId"], {
+                "is_active": False,
+                "updated_at": {
+                    "__type": "Date",
+                    "iso": current_time.isoformat()
+                }
+            })
+        
+    def cleanup_expired_tokens(self):
+        """Clean up expired refresh tokens"""
+        current_time = get_local_time()
+        expired_tokens = self.query(where={
+            "expires_at": {
+                "$lt": {
+                    "__type": "Date",
+                    "iso": current_time.isoformat()
+                }
+            },
+            "is_active": True
+        })
+        
+        for token in expired_tokens:
+            self.revoke_token(token["objectId"])

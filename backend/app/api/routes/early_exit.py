@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from ...database import query, create, update, delete
 from ...utils.websocket import broadcast_attendance_update
 from ...utils.time_utils import get_local_time
+from ...middleware.auth import get_current_user, get_admin_user
 import logging
 from pydantic import BaseModel
 from typing import Optional
@@ -35,8 +36,8 @@ def create_pointer(class_name, object_id):
     }
 
 @router.post("/early-exit-reason")
-async def submit_early_exit_reason(request: EarlyExitRequest):
-    """Submit reason for early exit"""
+async def submit_early_exit_reason(request: EarlyExitRequest, current_user: dict = Depends(get_current_user)):
+    """Submit reason for early exit (user can only submit for their own attendance)"""
     try:
         # Get parameters from request
         attendance_objectid = request.attendance_id  # This is the actual objectId of the attendance record
@@ -76,6 +77,11 @@ async def submit_early_exit_reason(request: EarlyExitRequest):
         if not employee_id:
             logger.error(f"Employee ID missing in attendance record: {attendance}")
             raise HTTPException(status_code=400, detail="Invalid attendance record (missing employee_id)")
+        
+        # Check if user is submitting for their own attendance record
+        if current_user["employee_id"] != employee_id:
+            logger.warning(f"User {current_user['email']} attempted to submit early exit reason for employee {employee_id}")
+            raise HTTPException(status_code=403, detail="You can only submit early exit reasons for your own attendance records")
         
         # If employee_id was provided in the request, verify it matches the attendance record
         if provided_employee_id and provided_employee_id != employee_id:
@@ -206,8 +212,8 @@ async def submit_early_exit_reason(request: EarlyExitRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/early-exit-reasons")
-async def get_early_exit_reasons():
-    """Get all early exit reasons with employee and attendance information"""
+async def get_early_exit_reasons(current_user: dict = Depends(get_admin_user)):
+    """Get all early exit reasons with employee and attendance information (admin only)"""
     try:
         # Get all early exit reasons ordered by creation date
         reasons = query("EarlyExitReason", order="-created_at")
@@ -321,8 +327,8 @@ async def delete_early_exit_reason(reason_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/employee-early-exit")
-async def submit_employee_early_exit(request: EmployeeEarlyExitRequest):
-    """Submit reason for early exit by employee ID"""
+async def submit_employee_early_exit(request: EmployeeEarlyExitRequest, current_user: dict = Depends(get_current_user)):
+    """Submit reason for early exit by employee ID (user can only submit for themselves)"""
     try:
         # Get parameters from request
         employee_id = request.employee_id
@@ -332,6 +338,11 @@ async def submit_employee_early_exit(request: EmployeeEarlyExitRequest):
         
         if not employee_id or not reason:
             raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        # Check if user is submitting for their own employee ID
+        if current_user["employee_id"] != employee_id:
+            logger.warning(f"User {current_user['email']} attempted to submit early exit reason for employee {employee_id}")
+            raise HTTPException(status_code=403, detail="You can only submit early exit reasons for yourself")
         
         # Find the employee
         employee_records = query("Employee", where={"employee_id": employee_id}, limit=1)

@@ -1,8 +1,9 @@
 from fastapi import APIRouter
-from app.api.routes import attendance, employees, timezone, websocket, early_exit
+from app.api.routes import attendance, employees, timezone, websocket, early_exit, auth
 
 router = APIRouter()
 
+router.include_router(auth.router, prefix="/auth", tags=["authentication"])
 router.include_router(attendance.router, prefix="/attendance", tags=["attendance"])
 router.include_router(employees.router, prefix="/employees", tags=["employees"])
 router.include_router(timezone.router, prefix="/timezone", tags=["timezone"])

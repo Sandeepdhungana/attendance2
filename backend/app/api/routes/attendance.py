@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter,  HTTPException, File, UploadFile, Form
+from fastapi import APIRouter,  HTTPException, File, UploadFile, Form, Depends
 from typing import List, Dict, Any, Optional
 from app.database import query, delete
 from app.services.attendance import get_attendance_records, get_employee_shift_info
@@ -8,6 +8,7 @@ from app.dependencies import get_face_recognition
 from app.utils.websocket import broadcast_attendance_update
 from app.utils.time_utils import get_local_time
 from app.services.send_email import send_welcome_email
+from app.middleware.auth import get_current_user, get_admin_user
 import logging
 import numpy as np
 import cv2
@@ -47,14 +48,44 @@ class EmployeeRegistration(BaseModel):
 
 
 @router.get("/attendance")
-def get_attendance():
-    """Get all attendance records"""
-    return get_attendance_records()
+def get_attendance(current_user: dict = Depends(get_admin_user)):
+    """Get attendance records for the current user"""
+    # Filter attendance records by current user's employee_id
+    attendance_records = query("Attendance", where={
+        "employee_id": current_user["employee_id"]
+    }, order="-timestamp")
+    
+    if not attendance_records:
+        return []
+    
+    # Get employee information for the current user
+    employee = query("Employee", where={
+        "employee_id": current_user["employee_id"]
+    }, limit=1)
+    
+    employee_name = employee[0]["name"] if employee else "Unknown"
+    
+    # Format the response
+    return [{
+        "name": employee_name,
+        "objectId": att["objectId"],
+        "id": att["employee_id"],
+        "employee_id": att["employee_id"],
+        "timestamp": att["timestamp"],
+        "entry_time": att.get("timestamp", {}).get("iso") if isinstance(att.get("timestamp"), dict) else att.get("timestamp"),
+        "exit_time": att.get("exit_time", {}).get("iso") if isinstance(att.get("exit_time"), dict) else att.get("exit_time"),
+        "confidence": att.get("confidence", 0),
+        "is_late": att.get("is_late", False),
+        "is_early_exit": att.get("is_early_exit", False),
+        "early_exit_reason": att.get("early_exit_reason"),
+        "created_at": att["createdAt"],
+        "updated_at": att["updatedAt"]
+    } for att in attendance_records]
 
 
 @router.delete("/attendance/{attendance_id}")
-async def delete_attendance(attendance_id: str):
-    """Delete an attendance record"""
+async def delete_attendance(attendance_id: str, current_user: dict = Depends(get_admin_user)):
+    """Delete an attendance record (admin only)"""
     try:
         logger.info(
             f"Attempting to delete attendance record with ID: {attendance_id}")
@@ -68,6 +99,8 @@ async def delete_attendance(attendance_id: str):
                 f"Attendance record not found with ID: {attendance_id}")
             raise HTTPException(
                 status_code=404, detail="Attendance record not found")
+        
+        # Admin can delete any attendance record (no ownership check needed)
 
         attendance = attendance[0]
         employee_id = attendance["employee_id"]
@@ -224,8 +257,8 @@ async def delete_early_exit_reason(reason_id: str):
 
 
 @router.get("/shifts")
-def get_shifts():
-    """Get all available shifts"""
+def get_shifts(current_user: dict = Depends(get_admin_user)):
+    """Get all available shifts (admin only)"""
     shifts = query("Shift")
     return [{
         "objectId": shift["objectId"],
@@ -486,7 +519,7 @@ def get_employee_shift(employee_id: str):
 
 
 @router.get("/attendance/by-date/{date}")
-def get_attendance_by_date(date: str):
+def get_attendance_by_date(date: str, current_user: dict = Depends(get_admin_user)):
     """Get attendance records for a specific date (YYYY-MM-DD format)"""
     try:
         # Parse the date string
@@ -585,6 +618,492 @@ def get_attendance_by_date(date: str):
     except Exception as e:
         logger.error(f"Error fetching attendance by date: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch attendance records: {str(e)}")
+
+
+@router.get("/attendance/analytics")
+def get_attendance_analytics(
+    start_date: str = None,
+    end_date: str = None,
+    employee_id: str = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get comprehensive attendance analytics for the current user or specific employee (non-admin users can only see their own data)"""
+    try:
+        from datetime import datetime, timedelta
+        from app.utils.time_utils import get_local_time
+        
+        # Determine target employee ID
+        if employee_id:
+            # Only admins can query other employees' data
+            if not current_user.get("is_admin", False):
+                raise HTTPException(status_code=403, detail="Admin access required to view other employees' data")
+            target_employee_id = employee_id
+        else:
+            # Regular users can only see their own data
+            target_employee_id = current_user["employee_id"]
+        
+        # Default to current month if no dates provided
+        if not start_date or not end_date:
+            current_date = get_local_time().date()
+            start_date = current_date.replace(day=1).strftime('%Y-%m-%d')
+            # Last day of current month
+            next_month = current_date.replace(day=28) + timedelta(days=4)
+            end_date = (next_month - timedelta(days=next_month.day)).strftime('%Y-%m-%d')
+        
+        # Parse dates
+        try:
+            start_parsed = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_parsed = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        
+        if start_parsed > end_parsed:
+            raise HTTPException(status_code=400, detail="Start date must be before end date")
+        
+        # Get local timezone
+        local_timezone = get_local_time().tzinfo
+        
+        # Create timezone-aware datetime objects
+        start_datetime = datetime.combine(start_parsed, datetime.min.time())
+        end_datetime = datetime.combine(end_parsed, datetime.max.time())
+        
+        start_datetime = local_timezone.localize(start_datetime)
+        end_datetime = local_timezone.localize(end_datetime)
+        
+        # If admin requests all employees (no employee_id specified), return aggregated data
+        if current_user.get("is_admin", False) and not employee_id:
+            # Query all attendance records for the date range
+            attendance_records = query("Attendance", where={
+                "$or": [
+                    {
+                        "entry_time": {
+                            "$gte": start_datetime.isoformat(),
+                            "$lte": end_datetime.isoformat()
+                        }
+                    },
+                    {
+                        "timestamp": {
+                            "$gte": {"__type": "Date", "iso": start_datetime.isoformat()},
+                            "$lte": {"__type": "Date", "iso": end_datetime.isoformat()}
+                        }
+                    }
+                ]
+            }, order="-timestamp")
+            
+            # Get all employees for employee lookup
+            employees = query("Employee")
+            employee_lookup = {emp["employee_id"]: emp for emp in employees}
+            
+            # Calculate aggregated metrics
+            total_working_days = 0
+            present_days_per_employee = {}
+            late_arrivals = 0
+            early_exits = 0
+            total_working_hours = 0
+            on_time_arrivals = 0
+            
+            # Calculate working days (excluding weekends)
+            current_date = start_parsed
+            while current_date <= end_parsed:
+                if current_date.weekday() < 5:  # Monday = 0, Sunday = 6
+                    total_working_days += 1
+                current_date += timedelta(days=1)
+            
+            # Process records
+            for record in attendance_records:
+                emp_id = record["employee_id"]
+                
+                # Track present days per employee
+                if emp_id not in present_days_per_employee:
+                    present_days_per_employee[emp_id] = set()
+                
+                # Get entry date
+                entry_time = record.get("entry_time")
+                if not entry_time:
+                    timestamp = record.get("timestamp", {})
+                    entry_time = timestamp.get("iso") if isinstance(timestamp, dict) else timestamp
+                
+                if entry_time:
+                    if isinstance(entry_time, str):
+                        entry_date = datetime.fromisoformat(entry_time.replace('Z', '+00:00')).date()
+                    else:
+                        entry_date = entry_time.date()
+                    present_days_per_employee[emp_id].add(entry_date)
+                
+                # Count metrics
+                if record.get("is_late"):
+                    late_arrivals += 1
+                else:
+                    on_time_arrivals += 1
+                
+                if record.get("is_early_exit"):
+                    early_exits += 1
+                
+                # Calculate working hours
+                exit_time = record.get("exit_time")
+                if entry_time and exit_time:
+                    try:
+                        if isinstance(entry_time, str):
+                            entry_dt = datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                        else:
+                            entry_dt = entry_time
+                        
+                        if isinstance(exit_time, dict) and exit_time.get("iso"):
+                            exit_dt = datetime.fromisoformat(exit_time["iso"].replace('Z', '+00:00'))
+                        elif isinstance(exit_time, str):
+                            exit_dt = datetime.fromisoformat(exit_time.replace('Z', '+00:00'))
+                        else:
+                            exit_dt = exit_time
+                        
+                        work_duration = exit_dt - entry_dt
+                        hours_worked = work_duration.total_seconds() / 3600
+                        if hours_worked > 0 and hours_worked < 24:
+                            total_working_hours += hours_worked
+                    except Exception as e:
+                        logger.warning(f"Error calculating working hours: {str(e)}")
+            
+            # Calculate aggregated metrics
+            total_employees = len(employee_lookup)
+            total_present_days = sum(len(days) for days in present_days_per_employee.values())
+            total_expected_days = total_working_days * total_employees
+            total_absent_days = total_expected_days - total_present_days
+            
+            attendance_percentage = (total_present_days / total_expected_days * 100) if total_expected_days > 0 else 0
+            on_time_percentage = (on_time_arrivals / len(attendance_records) * 100) if attendance_records else 0
+            average_working_hours = total_working_hours / total_present_days if total_present_days > 0 else 0
+            
+            return {
+                "date_range": {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "total_days": (end_parsed - start_parsed).days + 1,
+                    "working_days": total_working_days
+                },
+                "attendance_summary": {
+                    "present_days": total_present_days,
+                    "absent_days": total_absent_days,
+                    "attendance_percentage": round(attendance_percentage, 2),
+                    "total_records": len(attendance_records),
+                    "total_employees": total_employees
+                },
+                "punctuality": {
+                    "on_time_arrivals": on_time_arrivals,
+                    "late_arrivals": late_arrivals,
+                    "on_time_percentage": round(on_time_percentage, 2),
+                    "early_exits": early_exits
+                },
+                "working_hours": {
+                    "total_hours": round(total_working_hours, 2),
+                    "average_daily_hours": round(average_working_hours, 2),
+                    "expected_daily_hours": 8.0,  # Default for aggregated view
+                    "expected_total_hours": round(8.0 * total_present_days, 2),
+                    "hours_completion_percentage": round((total_working_hours / (8.0 * total_present_days) * 100) if total_present_days > 0 else 0, 2)
+                },
+                "employee_info": {
+                    "name": "All Employees",
+                    "employee_id": "all",
+                    "department": "All Departments",
+                    "shift": None,
+                    "is_aggregated": True
+                }
+            }
+        
+        # Query attendance records for specific employee
+        attendance_records = query("Attendance", where={
+            "employee_id": target_employee_id,
+            "$or": [
+                {
+                    "entry_time": {
+                        "$gte": start_datetime.isoformat(),
+                        "$lte": end_datetime.isoformat()
+                    }
+                },
+                {
+                    "timestamp": {
+                        "$gte": {"__type": "Date", "iso": start_datetime.isoformat()},
+                        "$lte": {"__type": "Date", "iso": end_datetime.isoformat()}
+                    }
+                }
+            ]
+        }, order="-timestamp")
+        
+        # Get employee info for shift details
+        employee = query("Employee", where={"employee_id": target_employee_id}, limit=1)
+        employee_data = employee[0] if employee else None
+        
+        if not employee_data:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        
+        # Get shift info
+        shift_info = None
+        if employee_data and employee_data.get("shift"):
+            shift_id = employee_data["shift"].get("objectId") if isinstance(employee_data["shift"], dict) else employee_data["shift"]
+            if shift_id:
+                shift_data = query("Shift", where={"objectId": shift_id}, limit=1)
+                shift_info = shift_data[0] if shift_data else None
+        
+        # Calculate total working days in range (excluding weekends)
+        working_days = 0
+        current_date = start_parsed
+        while current_date <= end_parsed:
+            if current_date.weekday() < 5:  # Monday = 0, Sunday = 6
+                working_days += 1
+            current_date += timedelta(days=1)
+        
+        # Process attendance records
+        present_days = set()
+        late_arrivals = 0
+        early_exits = 0
+        total_working_hours = 0
+        on_time_arrivals = 0
+        
+        for record in attendance_records:
+            # Get entry date
+            entry_time = record.get("entry_time")
+            if not entry_time:
+                timestamp = record.get("timestamp", {})
+                entry_time = timestamp.get("iso") if isinstance(timestamp, dict) else timestamp
+            
+            if entry_time:
+                if isinstance(entry_time, str):
+                    entry_date = datetime.fromisoformat(entry_time.replace('Z', '+00:00')).date()
+                else:
+                    entry_date = entry_time.date()
+                present_days.add(entry_date)
+            
+            # Count late arrivals
+            if record.get("is_late"):
+                late_arrivals += 1
+            else:
+                on_time_arrivals += 1
+            
+            # Count early exits
+            if record.get("is_early_exit"):
+                early_exits += 1
+            
+            # Calculate working hours if both entry and exit times exist
+            exit_time = record.get("exit_time")
+            if entry_time and exit_time:
+                try:
+                    if isinstance(entry_time, str):
+                        entry_dt = datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                    else:
+                        entry_dt = entry_time
+                    
+                    if isinstance(exit_time, dict) and exit_time.get("iso"):
+                        exit_dt = datetime.fromisoformat(exit_time["iso"].replace('Z', '+00:00'))
+                    elif isinstance(exit_time, str):
+                        exit_dt = datetime.fromisoformat(exit_time.replace('Z', '+00:00'))
+                    else:
+                        exit_dt = exit_time
+                    
+                    # Calculate hours worked
+                    work_duration = exit_dt - entry_dt
+                    hours_worked = work_duration.total_seconds() / 3600
+                    if hours_worked > 0 and hours_worked < 24:  # Sanity check
+                        total_working_hours += hours_worked
+                except Exception as e:
+                    logger.warning(f"Error calculating working hours: {str(e)}")
+        
+        # Calculate metrics
+        present_days_count = len(present_days)
+        absent_days = working_days - present_days_count
+        attendance_percentage = (present_days_count / working_days * 100) if working_days > 0 else 0
+        on_time_percentage = (on_time_arrivals / len(attendance_records) * 100) if attendance_records else 0
+        average_working_hours = total_working_hours / present_days_count if present_days_count > 0 else 0
+        
+        # Get expected working hours per day from shift
+        expected_daily_hours = 8  # Default
+        if shift_info:
+            try:
+                login_time = shift_info.get("login_time", "09:00")
+                logout_time = shift_info.get("logout_time", "17:00")
+                
+                login_hour, login_min = map(int, login_time.split(":"))
+                logout_hour, logout_min = map(int, logout_time.split(":"))
+                
+                expected_daily_hours = (logout_hour + logout_min/60) - (login_hour + login_min/60)
+            except:
+                expected_daily_hours = 8
+        
+        expected_total_hours = expected_daily_hours * present_days_count
+        hours_completion_percentage = (total_working_hours / expected_total_hours * 100) if expected_total_hours > 0 else 0
+        
+        return {
+            "date_range": {
+                "start_date": start_date,
+                "end_date": end_date,
+                "total_days": (end_parsed - start_parsed).days + 1,
+                "working_days": working_days
+            },
+            "attendance_summary": {
+                "present_days": present_days_count,
+                "absent_days": absent_days,
+                "attendance_percentage": round(attendance_percentage, 2),
+                "total_records": len(attendance_records)
+            },
+            "punctuality": {
+                "on_time_arrivals": on_time_arrivals,
+                "late_arrivals": late_arrivals,
+                "on_time_percentage": round(on_time_percentage, 2),
+                "early_exits": early_exits
+            },
+            "working_hours": {
+                "total_hours": round(total_working_hours, 2),
+                "average_daily_hours": round(average_working_hours, 2),
+                "expected_daily_hours": expected_daily_hours,
+                "expected_total_hours": round(expected_total_hours, 2),
+                "hours_completion_percentage": round(hours_completion_percentage, 2)
+            },
+            "employee_info": {
+                "name": employee_data.get("name", "Unknown") if employee_data else "Unknown",
+                "employee_id": target_employee_id,
+                "department": employee_data.get("department", "") if employee_data else "",
+                "shift": {
+                    "name": shift_info.get("name", "Default") if shift_info else "Default",
+                    "login_time": shift_info.get("login_time", "09:00") if shift_info else "09:00",
+                    "logout_time": shift_info.get("logout_time", "17:00") if shift_info else "17:00",
+                    "grace_period": shift_info.get("grace_period", 0) if shift_info else 0
+                } if shift_info else None,
+                "is_aggregated": False
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting attendance analytics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/attendance/by-date-range")
+def get_attendance_by_date_range(
+    start_date: str,
+    end_date: str,
+    employee_id: str = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get attendance records for a date range (admin can see all employees, non-admin users see only their own)"""
+    try:
+        # Parse dates
+        try:
+            start_parsed = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_parsed = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        
+        if start_parsed > end_parsed:
+            raise HTTPException(status_code=400, detail="Start date must be before end date")
+        
+        # Get local timezone
+        local_timezone = get_local_time().tzinfo
+        
+        # Create timezone-aware datetime objects
+        start_datetime = datetime.combine(start_parsed, datetime.min.time())
+        end_datetime = datetime.combine(end_parsed, datetime.max.time())
+        
+        start_datetime = local_timezone.localize(start_datetime)
+        end_datetime = local_timezone.localize(end_datetime)
+        
+        # Determine query parameters based on user role and request
+        if employee_id:
+            # Only admins can query other employees' data
+            if not current_user.get("is_admin", False):
+                raise HTTPException(status_code=403, detail="Admin access required to view other employees' data")
+            where_clause = {
+                "employee_id": employee_id,
+                "$or": [
+                    {
+                        "entry_time": {
+                            "$gte": start_datetime.isoformat(),
+                            "$lte": end_datetime.isoformat()
+                        }
+                    },
+                    {
+                        "timestamp": {
+                            "$gte": {"__type": "Date", "iso": start_datetime.isoformat()},
+                            "$lte": {"__type": "Date", "iso": end_datetime.isoformat()}
+                        }
+                    }
+                ]
+            }
+        elif current_user.get("is_admin", False):
+            # Admin without employee_id - return all employees' records
+            where_clause = {
+                "$or": [
+                    {
+                        "entry_time": {
+                            "$gte": start_datetime.isoformat(),
+                            "$lte": end_datetime.isoformat()
+                        }
+                    },
+                    {
+                        "timestamp": {
+                            "$gte": {"__type": "Date", "iso": start_datetime.isoformat()},
+                            "$lte": {"__type": "Date", "iso": end_datetime.isoformat()}
+                        }
+                    }
+                ]
+            }
+        else:
+            # Regular user - only their own records
+            where_clause = {
+                "employee_id": current_user["employee_id"],
+                "$or": [
+                    {
+                        "entry_time": {
+                            "$gte": start_datetime.isoformat(),
+                            "$lte": end_datetime.isoformat()
+                        }
+                    },
+                    {
+                        "timestamp": {
+                            "$gte": {"__type": "Date", "iso": start_datetime.isoformat()},
+                            "$lte": {"__type": "Date", "iso": end_datetime.isoformat()}
+                        }
+                    }
+                ]
+            }
+        
+        # Query attendance records
+        attendance_records = query("Attendance", where=where_clause, order="-timestamp")
+        
+        if not attendance_records:
+            return []
+        
+        # Get unique employee IDs for batch lookup
+        employee_ids = list(set(att["employee_id"] for att in attendance_records))
+        
+        # Batch fetch employee information
+        employees = query("Employee", where={
+            "employee_id": {"$in": employee_ids}
+        }) if employee_ids else []
+        
+        # Create employee lookup dictionary
+        employee_lookup = {emp["employee_id"]: emp for emp in employees}
+        
+        # Format response
+        return [{
+            "name": employee_lookup.get(att["employee_id"], {}).get("name", "Unknown"),
+            "objectId": att["objectId"],
+            "id": att["employee_id"],
+            "employee_id": att["employee_id"],
+            "timestamp": att["timestamp"],
+            "entry_time": att.get("entry_time") or (att.get("timestamp", {}).get("iso") if isinstance(att.get("timestamp"), dict) else att.get("timestamp")),
+            "exit_time": att.get("exit_time", {}).get("iso") if isinstance(att.get("exit_time"), dict) else att.get("exit_time"),
+            "confidence": att.get("confidence", 0),
+            "is_late": att.get("is_late", False),
+            "is_early_exit": att.get("is_early_exit", False),
+            "early_exit_reason": att.get("early_exit_reason"),
+            "late_message": att.get("late_message"),
+            "created_at": att.get("createdAt"),
+            "updated_at": att.get("updatedAt")
+        } for att in attendance_records]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting attendance by date range: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/anti-spoofing/config")

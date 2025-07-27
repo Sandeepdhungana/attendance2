@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, Form
+from fastapi import APIRouter, HTTPException, Form, Depends
 from app.models import TimezoneConfig
 from app.database import query
+from app.middleware.auth import get_admin_user
 import pytz
 import logging
 from datetime import datetime
@@ -28,8 +29,8 @@ def get_timezone():
     return {"timezone": timezone_configs[0]["timezone_name"]}
 
 @router.post("/timezone")
-async def set_timezone(timezone: str = Form(...)):
-    """Set application timezone"""
+async def set_timezone(timezone: str = Form(...), current_user: dict = Depends(get_admin_user)):
+    """Set application timezone (admin only)"""
     try:
         # Validate timezone
         pytz.timezone(timezone)

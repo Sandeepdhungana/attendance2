@@ -11,7 +11,7 @@ import gc
 import signal
 import sys
 from contextlib import asynccontextmanager
-from app.models import Employee, Attendance, OfficeTiming, Shift, TimezoneConfig
+from app.models import Employee, Attendance, OfficeTiming, Shift, TimezoneConfig, RefreshToken
 
 logger = logging.getLogger(__name__)
 
@@ -66,119 +66,119 @@ async def shutdown_application():
     sys.exit(0)
 
 
-def initialize_database():
-    """Initialize database with default data - DISABLED FOR PRODUCTION"""
-    # ALL DATABASE INITIALIZATION IS COMMENTED OUT - NO CREATION NEEDED
+# def initialize_database():
+#     """Initialize database with default data - DISABLED FOR PRODUCTION"""
+#     # ALL DATABASE INITIALIZATION IS COMMENTED OUT - NO CREATION NEEDED
     
-    # logger.info("Initializing Back4App database...")
+#     logger.info("Initializing Back4App database...")
     
-    # # Define all required classes and their fields
-    # required_classes = {
-    #     "Employee": {
-    #         "employee_id": "String",
-    #         "name": "String",
-    #         "embedding": "String",
-    #         "department": "String",
-    #         "position": "String",
-    #         "status": "String",
-    #         "shift": "Pointer<Shift>",
-    #         "phone_number": "String",
-    #         "email": "String",
-    #         "is_admin": "Boolean",
-    #     },
-    #     "Shift": {
-    #         "name": "String",
-    #         "login_time": "String",
-    #         "logout_time": "String",
-    #         "grace_period": "Number",
-    #     },
-    #     "Attendance": {
-    #         "employee_id": "String",
-    #         "employee": "Pointer<Employee>",
-    #         "timestamp": "Date",
-    #         "exit_time": "Date",
-    #         "confidence": "Number",
-    #         "is_late": "Boolean",
-    #         "is_early_exit": "Boolean",
-    #         "early_exit_reason": "String",
-    #     },
-    #     "TimezoneConfig": {
-    #         "timezone_name": "String",
-    #         "timezone_offset": "String",
-    #     },
-    #     "EarlyExitReason": {
-    #         "employee_id": "String",
-    #         "attendance_id": "String",
-    #         "attendance": "Pointer<Attendance>",
-    #         "employee": "Pointer<Employee>",
-    #         "reason": "String",
-    #     }
-    # }
+#     # Define all required classes and their fields
+#     required_classes = {
+#         "Employee": {
+#             "employee_id": "String",
+#             "name": "String",
+#             "embedding": "String",
+#             "department": "String",
+#             "position": "String",
+#             "status": "String",
+#             "shift": "Pointer<Shift>",
+#             "phone_number": "String",
+#             "email": "String",
+#             "is_admin": "Boolean",
+#         },
+#         "Shift": {
+#             "name": "String",
+#             "login_time": "String",
+#             "logout_time": "String",
+#             "grace_period": "Number",
+#         },
+#         "Attendance": {
+#             "employee_id": "String",
+#             "employee": "Pointer<Employee>",
+#             "timestamp": "Date",
+#             "exit_time": "Date",
+#             "confidence": "Number",
+#             "is_late": "Boolean",
+#             "is_early_exit": "Boolean",
+#             "early_exit_reason": "String",
+#         },
+#         "TimezoneConfig": {
+#             "timezone_name": "String",
+#             "timezone_offset": "String",
+#         },
+#         "EarlyExitReason": {
+#             "employee_id": "String",
+#             "attendance_id": "String",
+#             "attendance": "Pointer<Attendance>",
+#             "employee": "Pointer<Employee>",
+#             "reason": "String",
+#         }
+#     }
 
-    # # Create or verify each class
-    # logger.info("Available classes in Back4App:")
-    # for class_name, fields in required_classes.items():
-    #     try:
-    #         # Try to query the class to verify it exists
-    #         result = create_class_schema(class_name, fields)
-    #         logger.info(result)
-    #         logger.info(f"- {class_name} (exists)")
-    #     except Exception as e:
-    #         # If class doesn't exist, create it
-    #         try:
-    #             # Create class schema in Back4App
-    #             create_class_schema(class_name, fields)
-    #             logger.info(f"- {class_name} (created)")
-    #         except Exception as e:
-    #             logger.error(f"Error creating class {class_name}: {str(e)}")
+#     # Create or verify each class
+#     logger.info("Available classes in Back4App:")
+#     for class_name, fields in required_classes.items():
+#         try:
+#             # Try to query the class to verify it exists
+#             result = create_class_schema(class_name, fields)
+#             logger.info(result)
+#             logger.info(f"- {class_name} (exists)")
+#         except Exception as e:
+#             # If class doesn't exist, create it
+#             try:
+#                 # Create class schema in Back4App
+#                 create_class_schema(class_name, fields)
+#                 logger.info(f"- {class_name} (created)")
+#             except Exception as e:
+#                 logger.error(f"Error creating class {class_name}: {str(e)}")
 
-    # # Create default shifts if not exists
-    # try:
-    #     shifts = query("Shift", limit=1)
-    #     if not shifts:
-    #         default_shifts = [
-    #             {
-    #                 "name": "Morning Shift",
-    #                 "login_time": "09:00",
-    #                 "logout_time": "18:00",
-    #                 "grace_period": 30
-    #             },
-    #             {
-    #                 "name": "Evening Shift",
-    #                 "login_time": "14:00",
-    #                 "logout_time": "23:00",
-    #                 "grace_period": 30
-    #             },
-    #             {
-    #                 "name": "Night Shift",
-    #                 "login_time": "22:00",
-    #                 "logout_time": "07:00",
-    #                 "grace_period": 30
-    #             }
-    #         ]
-    #         for shift_data in default_shifts:
-    #             shift = Shift()
-    #             shift.create(shift_data)
-    #         logger.info("Created default shifts")
-    # except Exception as e:
-    #     logger.error(f"Error creating default shifts: {str(e)}")
+#     # Create default shifts if not exists
+#     try:
+#         shifts = query("Shift", limit=1)
+#         if not shifts:
+#             default_shifts = [
+#                 {
+#                     "name": "Morning Shift",
+#                     "login_time": "09:00",
+#                     "logout_time": "18:00",
+#                     "grace_period": 30
+#                 },
+#                 {
+#                     "name": "Evening Shift",
+#                     "login_time": "14:00",
+#                     "logout_time": "23:00",
+#                     "grace_period": 30
+#                 },
+#                 {
+#                     "name": "Night Shift",
+#                     "login_time": "22:00",
+#                     "logout_time": "07:00",
+#                     "grace_period": 30
+#                 }
+#             ]
+#             for shift_data in default_shifts:
+#                 shift = Shift()
+#                 shift.create(shift_data)
+#             logger.info("Created default shifts")
+#     except Exception as e:
+#         logger.error(f"Error creating default shifts: {str(e)}")
 
-    # # Check and create default timezone config if not exists
-    # try:
-    #     timezone_config = query("TimezoneConfig", limit=1)
-    #     if not timezone_config:
-    #         timezone = TimezoneConfig()
-    #         timezone.create({
-    #             "timezone_name": "Asia/Dubai",
-    #             "timezone_offset": "+04:00"
-    #         })
-    #         logger.info("Created default timezone configuration")
-    # except Exception as e:
-    #     logger.error(f"Error creating default timezone: {str(e)}")
+#     # Check and create default timezone config if not exists
+#     try:
+#         timezone_config = query("TimezoneConfig", limit=1)
+#         if not timezone_config:
+#             timezone = TimezoneConfig()
+#             timezone.create({
+#                 "timezone_name": "Asia/Dubai",
+#                 "timezone_offset": "+04:00"
+#             })
+#             logger.info("Created default timezone configuration")
+#     except Exception as e:
+#         logger.error(f"Error creating default timezone: {str(e)}")
 
-    # logger.info("Database initialization completed!")
+#     logger.info("Database initialization completed!")
     
-    logger.info("Database initialization skipped - no creation needed")
+#     logger.info("Database initialization skipped - no creation needed")
 
 
 @asynccontextmanager

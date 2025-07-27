@@ -45,13 +45,16 @@ export const useNotification = () => {
   return context;
 };
 
-const TransitionSlideUp = (props: SlideProps) => {
-  return <Slide {...props} direction="up" />;
-};
+const TransitionSlideUp = React.forwardRef<HTMLDivElement, SlideProps>((props, ref) => {
+  return <Slide {...props} direction="up" ref={ref} />;
+});
 
-const TransitionSlideDown = (props: SlideProps) => {
-  return <Slide {...props} direction="down" />;
-};
+const TransitionSlideDown = React.forwardRef<HTMLDivElement, SlideProps>((props, ref) => {
+  return <Slide {...props} direction="down" ref={ref} />;
+});
+
+TransitionSlideUp.displayName = 'TransitionSlideUp';
+TransitionSlideDown.displayName = 'TransitionSlideDown';
 
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [open, setOpen] = useState(false);
@@ -67,7 +70,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   });
   const [hasCloseButton, setHasCloseButton] = useState(true);
   const [transitionComponent, setTransitionComponent] = useState<
-    React.ComponentType<SlideProps> | undefined
+    React.ComponentType<SlideProps>
   >(TransitionSlideUp);
   const [callback, setCallback] = useState<(() => void) | undefined>(undefined);
 
@@ -92,11 +95,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       setHasCloseButton(hasCloseButton);
       
       // Set transition
-      if (transition === 'slide') {
-        setTransitionComponent(position === 'top' ? TransitionSlideDown : TransitionSlideUp);
-      } else {
-        setTransitionComponent(undefined); // Will use Zoom
-      }
+      setTransitionComponent(
+        transition === 'slide' 
+          ? (position === 'top' ? TransitionSlideDown : TransitionSlideUp)
+          : Zoom
+      );
       
       setCallback(onClose);
       setOpen(true);
@@ -134,7 +137,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         autoHideDuration={duration}
         onClose={handleClose}
         anchorOrigin={position}
-        TransitionComponent={transitionComponent || Zoom}
+        TransitionComponent={transitionComponent}
         sx={{ 
           maxWidth: '90%',
           width: 'auto',

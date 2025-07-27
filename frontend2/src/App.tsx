@@ -4,6 +4,9 @@ import { createTheme, responsiveFontSizes } from '@mui/material/styles';
 import { LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import Layout from './components/Layout';
+import ProtectedRoute from './components/ProtectedRoute';
+import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
 import Register from './pages/Register';
 import Attendance from './pages/Attendance';
 import Dashboard from './pages/Dashboard';
@@ -19,6 +22,7 @@ import Filter from './pages/Filter';
 import ProfileUpdate from './pages/ProfileUpdate';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { NotificationProvider } from './components/ui/NotificationProvider';
+import { AuthProvider } from './contexts/AuthContext';
 
 // Create WebSocket context
 const WebSocketContext = createContext<{
@@ -51,7 +55,7 @@ function WebSocketProvider({ children }: { children: React.ReactNode }) {
       wsRef.current = null;
     }
 
-    const ws = new WebSocket('ws://localhost:8000/ws/attendance');
+    const ws = new WebSocket('/ws/attendance');
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -281,26 +285,72 @@ function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <NotificationProvider>
-        <WebSocketProvider>
-          <LocalizationProvider dateAdapter={AdapterDateFns}>
-            <Layout>
+        <AuthProvider>
+          <WebSocketProvider>
+            <LocalizationProvider dateAdapter={AdapterDateFns}>
               <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/register" element={<Register />} />
-                <Route path="/attendance" element={<Attendance />} />
-                <Route path="/employees" element={<Users />} />
-                <Route path="/debug" element={<Debug />} />
-                <Route path="/office-timings" element={<OfficeTimings />} />
-                <Route path="/early-exit-reasons" element={<EarlyExitReasons />} />
-                <Route path="/shift/:id?" element={<Shift />} />
-                <Route path="/shifts" element={<Shifts />} />
-                <Route path="/employee-shifts" element={<EmployeeShifts />} />
-                <Route path="/filter" element={<Filter />} />
-                <Route path="/profile/update/:employee_id" element={<ProfileUpdate />} />
+                <Route path="/login" element={<Login />} />
+                <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/*" element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <Routes>
+                        <Route path="/" element={<Dashboard />} />
+                        <Route path="/register" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <Register />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/attendance" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <Attendance />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/employees" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <Users />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/debug" element={<Debug />} />
+                        <Route path="/office-timings" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <OfficeTimings />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/early-exit-reasons" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <EarlyExitReasons />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/shift/:id?" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <Shift />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/shifts" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <Shifts />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/employee-shifts" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <EmployeeShifts />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/filter" element={
+                          <ProtectedRoute requireAdmin={true}>
+                            <Filter />
+                          </ProtectedRoute>
+                        } />
+                        <Route path="/profile/update/:employee_id" element={<ProfileUpdate />} />
+                      </Routes>
+                    </Layout>
+                  </ProtectedRoute>
+                } />
               </Routes>
-            </Layout>
-          </LocalizationProvider>
-        </WebSocketProvider>
+            </LocalizationProvider>
+          </WebSocketProvider>
+        </AuthProvider>
       </NotificationProvider>
     </ThemeProvider>
   );
