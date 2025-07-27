@@ -243,7 +243,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // Auto-refresh token before it expires
   useEffect(() => {
-    let intervalId: NodeJS.Timeout;
+    let intervalId: number;
 
     if (state.isAuthenticated && state.accessToken) {
       // Check token validity every 5 minutes

@@ -48,14 +48,13 @@ const Login: React.FC = () => {
       const from = location.state?.from?.pathname || '/';
       navigate(from, { replace: true });
     }
-  }, [state.isAuthenticated, navigate, location]);
+  }, [state.isAuthenticated, navigate, location.state?.from?.pathname]);
 
-  // Clear errors when component unmounts
-  useEffect(() => {
-    return () => {
-      clearError();
-    };
-  }, [clearError]);
+
+
+
+
+
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -71,6 +70,8 @@ const Login: React.FC = () => {
         [name]: undefined,
       }));
     }
+
+    // Don't auto-clear errors - let user manually dismiss them
   };
 
   const validateForm = (): boolean => {
@@ -99,10 +100,15 @@ const Login: React.FC = () => {
       return;
     }
 
+    // Clear any existing errors before new login attempt
+    if (state.error) {
+      clearError();
+    }
+
     try {
       await login(formData);
       // Navigation will happen automatically due to useEffect
-    } catch (error) {
+    } catch (error: any) {
       // Error is handled by the auth context
     }
   };
@@ -166,10 +172,26 @@ const Login: React.FC = () => {
 
         {/* Form */}
         <CardContent sx={{ p: 4 }}>
+          {/* Error Alert */}
           {state.error && (
             <Alert 
-              severity="error" 
-              sx={{ mb: 3, borderRadius: 2 }}
+              severity="error"
+              sx={{ 
+                mb: 3, 
+                borderRadius: 2,
+                backgroundColor: alpha(theme.palette.error.main, 0.15),
+                color: theme.palette.error.dark,
+                border: `1px solid ${theme.palette.error.main}`,
+                fontWeight: 500,
+                '& .MuiAlert-icon': {
+                  color: theme.palette.error.main,
+                  fontSize: '1.2rem',
+                },
+                '& .MuiAlert-message': {
+                  fontWeight: 500,
+                  fontSize: '0.95rem',
+                }
+              }}
               onClose={clearError}
             >
               {state.error}

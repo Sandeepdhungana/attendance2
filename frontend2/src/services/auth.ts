@@ -95,7 +95,12 @@ export class AuthService {
       
       return response.data;
     } catch (error: any) {
-      throw new Error(error.response?.data?.detail || 'Login failed');
+      // Extract error message from response
+      const errorMessage = error.response?.data?.detail || 
+                          error.response?.data?.message || 
+                          error.message || 
+                          'Login failed';
+      throw new Error(errorMessage);
     }
   }
 
@@ -104,7 +109,12 @@ export class AuthService {
       const response = await api.post<User>('/auth/register', userData);
       return response.data;
     } catch (error: any) {
-      throw new Error(error.response?.data?.detail || 'Registration failed');
+      // Extract error message from response  
+      const errorMessage = error.response?.data?.detail || 
+                          error.response?.data?.message || 
+                          error.message || 
+                          'Registration failed';
+      throw new Error(errorMessage);
     }
   }
 

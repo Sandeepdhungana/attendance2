@@ -90,7 +90,7 @@ export default function Dashboard() {
     startDate: startOfMonth(new Date()),
     endDate: endOfMonth(new Date()),
   });
-
+  
   // State management
   const [analytics, setAnalytics] = useState<AttendanceAnalytics | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
@@ -100,7 +100,7 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 10 });
   const [error, setError] = useState<string | null>(null);
-
+  
   // Delete dialog state
   const [deleteDialog, setDeleteDialog] = useState({
     open: false,
@@ -836,13 +836,13 @@ const EmployeeManagementSection = ({
       headerName: 'Actions',
       width: 100,
       renderCell: (params: GridRenderCellParams) => (
-        <IconButton
-          onClick={() => setDeleteDialog({ open: true, item: params.row, loading: false })}
-          color="error"
-          size="small"
-        >
-          <DeleteIcon />
-        </IconButton>
+          <IconButton
+            onClick={() => setDeleteDialog({ open: true, item: params.row, loading: false })}
+            color="error"
+            size="small"
+          >
+            <DeleteIcon />
+          </IconButton>
       ),
     }] : []),
   ];
@@ -874,9 +874,9 @@ const EmployeeManagementSection = ({
       {isAdmin && (
         <>
           {/* Employee Selector for Analytics */}
-          <EmployeeSelectorComponent
-            selectedEmployee={selectedEmployee}
-            onEmployeeChange={handleEmployeeChange}
+        <EmployeeSelectorComponent
+          selectedEmployee={selectedEmployee}
+          onEmployeeChange={handleEmployeeChange}
           />
 
           <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
@@ -898,53 +898,53 @@ const EmployeeManagementSection = ({
 
           <TabPanel value={mainTabValue} index={0}>
             {/* Analytics Overview Tab */}
-            <DateRangePickerComponent
-              dateRange={dateRange}
+      <DateRangePickerComponent
+        dateRange={dateRange}
               onDateRangeChange={handleDateRangeChange}
             />
 
             <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
               <Tabs value={tabValue} onChange={handleTabChange}>
-                <Tab 
-                  label="Analytics" 
-                  icon={<AnalyticsIcon />} 
-                  iconPosition="start"
+          <Tab 
+            label="Analytics" 
+            icon={<AnalyticsIcon />}
+            iconPosition="start"
                   sx={{ textTransform: 'none', fontWeight: 600 }}
-                />
-                <Tab 
+          />
+          <Tab 
                   label="Records" 
                   icon={<ScheduleIcon />} 
-                  iconPosition="start"
+            iconPosition="start"
                   sx={{ textTransform: 'none', fontWeight: 600 }}
-                />
-              </Tabs>
+          />
+        </Tabs>
             </Box>
 
-            <TabPanel value={tabValue} index={0}>
-              {analytics ? (
-                <AttendanceAnalyticsComponent 
-                  analytics={analytics}
-                  loading={analyticsLoading}
-                />
-              ) : (
-                <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-                  <CircularProgress />
-                </Box>
-              )}
-            </TabPanel>
+      <TabPanel value={tabValue} index={0}>
+        {analytics ? (
+          <AttendanceAnalyticsComponent 
+            analytics={analytics} 
+            loading={analyticsLoading}
+          />
+        ) : (
+          <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+            <CircularProgress />
+          </Box>
+        )}
+      </TabPanel>
 
-            <TabPanel value={tabValue} index={1}>
-              <Card>
-                <CardContent>
-                  <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                    <Typography variant="h6">
-                      {getRecordsTitle()}
-                    </Typography>
-                    <TextField
-                      size="small"
-                      placeholder="Search records..."
-                      value={searchQuery}
-                      onChange={(e) => handleSearch(e.target.value)}
+      <TabPanel value={tabValue} index={1}>
+        <Card>
+          <CardContent>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="h6">
+                {getRecordsTitle()}
+              </Typography>
+              <TextField
+                size="small"
+                placeholder="Search records..."
+                value={searchQuery}
+                onChange={(e) => handleSearch(e.target.value)}
                       sx={{ width: 300 }}
                     />
                   </Box>
