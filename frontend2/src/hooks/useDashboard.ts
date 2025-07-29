@@ -2,16 +2,34 @@ import { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from './useWebSocket';
 import { AttendanceRecord, User } from '../types/dashboard';
 import { DeleteDialogState } from '../types/deleteDialog';
+import { useEmployees } from '../contexts/EmployeeContext';
 import api from '../api/config';
 import { format } from 'date-fns';
 
 export function useDashboard() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [filteredRecords, setFilteredRecords] = useState<AttendanceRecord[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
   const [filteredUsers, setFilteredUsers] = useState<User[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(true);
-  const [usersLoading, setUsersLoading] = useState(true);
+  
+  // Use employee context instead of local users state
+  const { 
+    state: { employees, isLoading: usersLoading, error: employeesError }, 
+    getActiveEmployees 
+  } = useEmployees();
+  
+  // Map employees to users format for compatibility
+  const users: User[] = employees.map(emp => ({
+    user_id: emp.objectId,
+    employee_id: emp.employee_id,
+    objectId: emp.objectId,
+    name: emp.name || '',
+    department: emp.department || '',
+    position: emp.position || '',
+    status: emp.is_active ? 'active' : 'inactive',
+    shift: emp.shift,
+    created_at: new Date().toISOString(),
+  }));
   const [error, setError] = useState<string | null>(null);
   const [tabValue, setTabValue] = useState(0);
   const [dateFilter, setDateFilter] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -38,7 +56,6 @@ export function useDashboard() {
   const fetchData = useCallback(async () => {
     try {
       setRecordsLoading(true);
-      setUsersLoading(true);
       setError(null);
 
       // Fetch attendance records
@@ -46,15 +63,12 @@ export function useDashboard() {
       console.log('Attendance data from API:', attendanceResponse.data);
       setRecords(attendanceResponse.data);
       
-      // Fetch users
-      const usersResponse = await api.get('/employees');
-      setUsers(usersResponse.data);
-      setFilteredUsers(usersResponse.data);
+      // Users now come from EmployeeContext - just set filtered users
+      setFilteredUsers(users);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
       setRecordsLoading(false);
-      setUsersLoading(false);
     }
   }, []);
 

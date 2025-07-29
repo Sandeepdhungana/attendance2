@@ -121,19 +121,26 @@ export class AuthService {
   public async refreshAccessToken(): Promise<string> {
     // Prevent multiple concurrent refresh attempts
     if (this.refreshTokenPromise) {
+      console.log('Token refresh already in progress, waiting...');
       return this.refreshTokenPromise;
     }
 
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) {
+      console.log('No refresh token available');
       throw new Error('No refresh token available');
     }
 
+    console.log('Starting token refresh...');
     this.refreshTokenPromise = this.performTokenRefresh(refreshToken);
     
     try {
       const newAccessToken = await this.refreshTokenPromise;
+      console.log('Token refresh successful');
       return newAccessToken;
+    } catch (error) {
+      console.error('Token refresh failed:', error);
+      throw error;
     } finally {
       this.refreshTokenPromise = null;
     }
@@ -148,9 +155,21 @@ export class AuthService {
       this.setTokens(response.data.access_token, response.data.refresh_token);
       return response.data.access_token;
     } catch (error: any) {
+      console.log('Refresh token request failed, clearing tokens');
       this.clearTokens();
       this.clearUser();
-      throw new Error('Token refresh failed');
+      
+      // Provide more specific error messages
+      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        throw new Error('Request timeout - server may be unreachable');
+      }
+      if (error.response?.status === 401) {
+        throw new Error('Refresh token expired');
+      }
+      if (error.code === 'NETWORK_ERROR' || !error.response) {
+        throw new Error('Network error - server may be down');
+      }
+      throw new Error(`Token refresh failed: ${error.message || 'Unknown error'}`);
     }
   }
 

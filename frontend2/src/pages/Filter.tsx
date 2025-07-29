@@ -45,16 +45,13 @@ import {
   FileDownload,
   TableChart,
 } from '@mui/icons-material';
-import { format, parseISO, eachDayOfInterval, isWeekend } from 'date-fns';
+import { format, parseISO, isWeekend, eachDayOfInterval } from 'date-fns';
 import * as XLSX from 'xlsx';
 import api from '../api/config';
+import { useEmployees, Employee as ContextEmployee } from '../contexts/EmployeeContext';
 
-interface Employee {
-  employee_id: string;
-  name: string;
-  department: string;
-  position: string;
-}
+// Using Employee interface from EmployeeContext
+type Employee = ContextEmployee;
 
 interface AttendanceRecord {
   objectId: string;
@@ -89,21 +86,48 @@ interface FilteredAttendanceData {
   };
 }
 
+// Cache for API requests to prevent duplicate calls
+const attendanceCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Helper function to get cache key
+const getCacheKey = (employeeId: string, startDate: string, endDate: string) => 
+  `${employeeId}_${startDate}_${endDate}`;
+
+// Helper function to check if cache is valid
+const isCacheValid = (timestamp: number) => 
+  Date.now() - timestamp < CACHE_DURATION;
+
+// Helper function to clear expired cache entries
+const clearExpiredCache = () => {
+  const now = Date.now();
+  for (const [key, entry] of attendanceCache.entries()) {
+    if (now - entry.timestamp >= CACHE_DURATION) {
+      attendanceCache.delete(key);
+    }
+  }
+};
+
+// Helper function to clear all cache
+const clearAllCache = () => {
+  attendanceCache.clear();
+  console.log('Cache cleared');
+};
+
 export default function Filter() {
   const theme = useTheme();
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [endDate, setEndDate] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [attendanceData, setAttendanceData] = useState<FilteredAttendanceData | null>(null);
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
 
-  // Fetch employees on component mount
-  useEffect(() => {
-    fetchEmployees();
-  }, []);
+  // Use employee context instead of local state
+  const { getActiveEmployees, state: { isLoading: employeesLoading } } = useEmployees();
+  const employees = getActiveEmployees();
 
   // Auto-clear success message
   useEffect(() => {
@@ -115,15 +139,7 @@ export default function Filter() {
     }
   }, [exportSuccess]);
 
-  const fetchEmployees = async () => {
-    try {
-      const response = await api.get('/employees');
-      setEmployees(response.data);
-    } catch (err) {
-      console.error('Error fetching employees:', err);
-      setError('Failed to fetch employees');
-    }
-  };
+  // Employee data now comes from EmployeeContext - no need for local fetch
 
   const generateDateRange = (start: Date, end: Date): string[] => {
     return eachDayOfInterval({ start, end })
@@ -195,32 +211,59 @@ export default function Filter() {
 
     setLoading(true);
     setError(null);
+    setLoadingMessage('Preparing filter request...');
 
     try {
-      // Fetch attendance records for each date in the range
-      const dateRange = eachDayOfInterval({ start: startDate, end: endDate });
-      const allRecords: AttendanceRecord[] = [];
-
-      for (const date of dateRange) {
-        const dateStr = format(date, 'yyyy-MM-dd');
-        try {
-          const response = await api.get(`/attendance/by-date/${dateStr}`);
-          const dayRecords = response.data.filter((record: AttendanceRecord) => 
-            record.employee_id === selectedEmployee.employee_id
-          );
-          allRecords.push(...dayRecords);
-        } catch (err) {
-          console.warn(`Failed to fetch data for ${dateStr}:`, err);
-        }
+      // Check cache first
+      const startDateStr = format(startDate, 'yyyy-MM-dd');
+      const endDateStr = format(endDate, 'yyyy-MM-dd');
+      const cacheKey = getCacheKey(selectedEmployee.employee_id, startDateStr, endDateStr);
+      
+      setLoadingMessage('Checking cache...');
+      const cachedData = attendanceCache.get(cacheKey);
+      if (cachedData && isCacheValid(cachedData.timestamp)) {
+        console.log('Using cached attendance data for:', { employee_id: selectedEmployee.employee_id, startDateStr, endDateStr });
+        setLoadingMessage('Processing cached data...');
+        const processedData = processAttendanceData(cachedData.data, startDate, endDate);
+        setAttendanceData(processedData);
+        setLoading(false);
+        setLoadingMessage('');
+        return;
       }
 
-      const processedData = processAttendanceData(allRecords, startDate, endDate);
+      // Use optimized date-range endpoint with single API call
+      setLoadingMessage('Fetching attendance data...');
+      const params = new URLSearchParams();
+      params.append('start_date', startDateStr);
+      params.append('end_date', endDateStr);
+      params.append('employee_id', selectedEmployee.employee_id);
+      
+      console.log('Fetching attendance data for date range:', {
+        start_date: startDateStr,
+        end_date: endDateStr,
+        employee_id: selectedEmployee.employee_id
+      });
+
+      const response = await api.get(`/attendance/by-date-range?${params.toString()}`);
+      
+      console.log('Received attendance records:', response.data.length);
+      setLoadingMessage('Processing attendance data...');
+      
+      // Cache the response
+      attendanceCache.set(cacheKey, {
+        data: response.data,
+        timestamp: Date.now()
+      });
+      
+      const processedData = processAttendanceData(response.data, startDate, endDate);
       setAttendanceData(processedData);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching attendance data:', err);
-      setError('Failed to fetch attendance data');
+      const errorMessage = err.response?.data?.detail || err.message || 'Failed to fetch attendance data';
+      setError(`Error: ${errorMessage}`);
     } finally {
       setLoading(false);
+      setLoadingMessage('');
     }
   };
 
@@ -557,7 +600,7 @@ export default function Filter() {
                 startIcon={loading ? <CircularProgress size={20} /> : <Analytics />}
                 sx={{ height: 56 }}
               >
-                {loading ? 'Filtering...' : 'Filter'}
+                {loading ? (loadingMessage || 'Filtering...') : 'Filter'}
               </Button>
             </Grid>
           </Grid>

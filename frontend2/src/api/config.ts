@@ -11,6 +11,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 10000, // 10 seconds timeout to prevent hanging requests
 });
 
 // Store reference to avoid circular imports
@@ -36,8 +37,13 @@ api.interceptors.request.use(
     }
 
     try {
-      // Ensure we have a valid token
-      const token = await authServiceInstance.ensureValidToken();
+      // Ensure we have a valid token with timeout
+      const tokenPromise = authServiceInstance.ensureValidToken();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Token check timeout')), 5000)
+      );
+      
+      const token = await Promise.race([tokenPromise, timeoutPromise]);
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -64,7 +70,9 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       // Skip retry for login/register endpoints
-      if (originalRequest.url?.includes('/auth/login') || originalRequest.url?.includes('/auth/register')) {
+      if (originalRequest.url?.includes('/auth/login') || 
+          originalRequest.url?.includes('/auth/register') ||
+          originalRequest.url?.includes('/auth/refresh')) {
         return Promise.reject(error);
       }
 
@@ -73,6 +81,16 @@ api.interceptors.response.use(
         if (!authServiceInstance) {
           const { default: AuthService } = await import('../services/auth');
           authServiceInstance = AuthService;
+        }
+
+        // Check if we have a refresh token before attempting refresh
+        const refreshToken = authServiceInstance.getRefreshToken();
+        if (!refreshToken) {
+          // No refresh token available, redirect to login
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+          return Promise.reject(error);
         }
 
         // Try to refresh token
@@ -86,7 +104,8 @@ api.interceptors.response.use(
           return api(originalRequest);
         }
       } catch (refreshError) {
-        // Refresh failed, redirect to login
+        // Refresh failed - clear everything and redirect
+        console.log('Token refresh failed in interceptor:', refreshError);
         if (authServiceInstance) {
           authServiceInstance.clearTokens();
           authServiceInstance.clearUser();
@@ -94,7 +113,10 @@ api.interceptors.response.use(
         
         // Only redirect if we're not already on login page
         if (window.location.pathname !== '/login') {
-          window.location.href = '/login';
+          // Add a small delay to prevent race conditions with AuthContext
+          setTimeout(() => {
+            window.location.href = '/login';
+          }, 100);
         }
         
         return Promise.reject(refreshError);

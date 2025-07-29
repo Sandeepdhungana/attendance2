@@ -133,7 +133,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
                 },
               });
             } catch (error) {
-              // Refresh failed, clear tokens
+              // Refresh failed - both tokens are likely expired
+              console.log('Token refresh failed during initialization:', error);
               AuthService.clearTokens();
               AuthService.clearUser();
               dispatch({ type: 'AUTH_LOGOUT' });
@@ -145,12 +146,37 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }
       } catch (error) {
         console.error('Auth initialization error:', error);
-        dispatch({ type: 'SET_LOADING', payload: false });
+        // Ensure we always clear loading state on error
+        AuthService.clearTokens();
+        AuthService.clearUser();
+        dispatch({ type: 'AUTH_LOGOUT' });
       }
     };
 
-    initializeAuth();
+    // Add a fallback timeout to prevent infinite loading
+    const timeoutId = setTimeout(() => {
+      console.warn('Auth initialization timeout - forcing logout');
+      AuthService.clearTokens();
+      AuthService.clearUser();
+      dispatch({ type: 'AUTH_LOGOUT' });
+    }, 15000); // 15 seconds timeout
+
+    initializeAuth().finally(() => {
+      clearTimeout(timeoutId);
+    });
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
   }, []);
+
+  // Handle redirect to login when not authenticated and not loading
+  useEffect(() => {
+    if (!state.isLoading && !state.isAuthenticated && window.location.pathname !== '/login' && window.location.pathname !== '/forgot-password') {
+      console.log('Redirecting to login - user not authenticated');
+      window.location.href = '/login';
+    }
+  }, [state.isLoading, state.isAuthenticated]);
 
   // Login function
   const login = async (credentials: LoginRequest): Promise<void> => {

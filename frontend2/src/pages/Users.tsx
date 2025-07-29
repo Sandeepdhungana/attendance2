@@ -22,6 +22,7 @@ import {
 } from '@mui/material';
 import api from '../api/config';
 import { useWebSocket } from '../App';
+import { useEmployees, Employee as ContextEmployee } from '../contexts/EmployeeContext';
 import { useNavigate } from 'react-router-dom';
 
 interface User {
@@ -41,11 +42,9 @@ interface User {
 
 export default function Users() {
   const navigate = useNavigate();
-  const [users, setUsers] = useState<User[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isCreatingUser, setIsCreatingUser] = useState(false);
-  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const { sendMessage } = useWebSocket();
   const [openDialog, setOpenDialog] = useState(false);
@@ -58,23 +57,27 @@ export default function Users() {
     shift_id: '',
   });
 
-  const fetchUsers = async () => {
-    try {
-      setIsLoadingUsers(true);
-      setError(null);
-      const response = await api.get('/employees');
-      setUsers(response.data);
-    } catch (error) {
-      setError('Failed to fetch employees');
-      console.error('Error fetching employees:', error);
-    } finally {
-      setIsLoadingUsers(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  // Use employee context instead of local state
+  const { 
+    state: { employees, isLoading: isLoadingUsers, error: employeesError }, 
+    addEmployee,
+    updateEmployee,
+    deleteEmployee: deleteEmployeeFromContext,
+    fetchEmployees
+  } = useEmployees();
+  
+  // Map employees to users format for compatibility
+  const users: User[] = employees.map(emp => ({
+    user_id: emp.objectId,
+    employee_id: emp.employee_id,
+    objectId: emp.objectId,
+    name: emp.name || '',
+    department: emp.department || '',
+    position: emp.position || '',
+    status: emp.is_active ? 'active' : 'inactive',
+    shift: emp.shift,
+    created_at: new Date().toISOString(), // Default since context doesn't have this
+  }));
 
   const handleAddUser = async () => {
     if (!newUser.name || !newUser.employee_id) {

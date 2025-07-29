@@ -60,6 +60,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { AttendanceRecord, User, AttendanceAnalytics, DateRangeFilter, Employee } from '../types/dashboard';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useEmployees } from '../contexts/EmployeeContext';
 import api from '../api/config';
 import AttendanceAnalyticsComponent from '../components/dashboard/AttendanceAnalytics';
 import DateRangePickerComponent from '../components/dashboard/DateRangePicker';
@@ -80,6 +81,13 @@ interface EmployeeEditData {
 export default function Dashboard() {
   const theme = useTheme();
   const { state: authState } = useAuth();
+  const { 
+    state: { employees, isLoading: employeesLoading, error: employeesError }, 
+    getActiveEmployees, 
+    updateEmployee, 
+    deleteEmployee: deleteEmployeeFromContext,
+    fetchEmployees
+  } = useEmployees();
   
   // Main tab state
   const [mainTabValue, setMainTabValue] = useState(0);
@@ -107,10 +115,6 @@ export default function Dashboard() {
     item: null as AttendanceRecord | null,
     loading: false,
   });
-
-  // Employee management state
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [employeesLoading, setEmployeesLoading] = useState(false);
   const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
   const [employeeTabValue, setEmployeeTabValue] = useState(0);
   const [editDialog, setEditDialog] = useState({
@@ -572,21 +576,7 @@ const EmployeeManagementSection = ({
   );
 };
 
-  // Fetch functions and handlers
-  const fetchEmployees = async () => {
-    if (!isAdmin) return;
-    
-    setEmployeesLoading(true);
-    try {
-      const response = await api.get('/employees');
-      setEmployees(response.data);
-    } catch (error) {
-      console.error('Error fetching employees:', error);
-      setError('Failed to fetch employees');
-    } finally {
-      setEmployeesLoading(false);
-    }
-  };
+  // Employee data now comes from EmployeeContext
 
   const fetchAnalytics = async () => {
     setAnalyticsLoading(true);
@@ -628,6 +618,38 @@ const EmployeeManagementSection = ({
       console.error('Error fetching records:', error);
       setError('Failed to fetch attendance records');
     } finally {
+      setRecordsLoading(false);
+    }
+  };
+
+  // Optimized function to fetch both analytics and records in parallel
+  const fetchAllData = async () => {
+    setAnalyticsLoading(true);
+    setRecordsLoading(true);
+    setError(null);
+    
+    try {
+      const params = new URLSearchParams();
+      params.append('start_date', format(dateRange.startDate, 'yyyy-MM-dd'));
+      params.append('end_date', format(dateRange.endDate, 'yyyy-MM-dd'));
+      
+      if (selectedEmployee) {
+        params.append('employee_id', selectedEmployee.employee_id);
+      }
+      
+      // Fetch both analytics and records in parallel
+      const [analyticsResponse, recordsResponse] = await Promise.all([
+        api.get(`/attendance/analytics?${params.toString()}`),
+        api.get(`/attendance/by-date-range?${params.toString()}`)
+      ]);
+      
+      setAnalytics(analyticsResponse.data);
+      setRecords(recordsResponse.data);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      setError('Failed to fetch dashboard data');
+    } finally {
+      setAnalyticsLoading(false);
       setRecordsLoading(false);
     }
   };

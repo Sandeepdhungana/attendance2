@@ -16,8 +16,43 @@ from app.models import Employee, Shift
 from pydantic import BaseModel
 from datetime import datetime
 from app.api.routes.websocket import EmployeeCache
+import hashlib
+import time
 
 logger = logging.getLogger(__name__)
+
+# Simple in-memory cache for attendance queries
+attendance_query_cache: Dict[str, Dict[str, Any]] = {}
+CACHE_TTL = 300  # 5 minutes
+
+def get_cache_key(employee_id: str, start_date: str, end_date: str, query_type: str = "range") -> str:
+    """Generate a cache key for attendance queries"""
+    key_string = f"{query_type}_{employee_id}_{start_date}_{end_date}"
+    return hashlib.md5(key_string.encode()).hexdigest()
+
+def is_cache_valid(cache_entry: Dict[str, Any]) -> bool:
+    """Check if cache entry is still valid"""
+    return time.time() - cache_entry.get("timestamp", 0) < CACHE_TTL
+
+def get_from_cache(cache_key: str) -> Optional[Any]:
+    """Get data from cache if valid"""
+    if cache_key in attendance_query_cache:
+        cache_entry = attendance_query_cache[cache_key]
+        if is_cache_valid(cache_entry):
+            logger.info(f"Cache hit for key: {cache_key}")
+            return cache_entry["data"]
+        else:
+            # Remove expired entry
+            del attendance_query_cache[cache_key]
+    return None
+
+def set_cache(cache_key: str, data: Any) -> None:
+    """Set data in cache"""
+    attendance_query_cache[cache_key] = {
+        "data": data,
+        "timestamp": time.time()
+    }
+    logger.info(f"Cached data for key: {cache_key}")
 
 router = APIRouter()
 
@@ -629,6 +664,22 @@ def get_attendance_analytics(
 ):
     """Get comprehensive attendance analytics for the current user or specific employee (non-admin users can only see their own data)"""
     try:
+        # Determine effective employee_id for caching
+        effective_employee_id = employee_id or current_user.get("employee_id", "all")
+        
+        # Use default dates if not provided
+        if not start_date or not end_date:
+            current_date = get_local_time().date()
+            start_date = current_date.replace(day=1).strftime('%Y-%m-%d')
+            # Last day of current month
+            next_month = current_date.replace(day=28) + timedelta(days=4)
+            end_date = (next_month - timedelta(days=next_month.day)).strftime('%Y-%m-%d')
+        
+        # Check cache first
+        cache_key = get_cache_key(effective_employee_id, start_date, end_date, "analytics")
+        cached_result = get_from_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
         from datetime import datetime, timedelta
         from app.utils.time_utils import get_local_time
         
@@ -929,7 +980,7 @@ def get_attendance_analytics(
         expected_total_hours = expected_daily_hours * present_days_count
         hours_completion_percentage = (total_working_hours / expected_total_hours * 100) if expected_total_hours > 0 else 0
         
-        return {
+        result = {
             "date_range": {
                 "start_date": start_date,
                 "end_date": end_date,
@@ -969,6 +1020,11 @@ def get_attendance_analytics(
             }
         }
         
+        # Cache the result
+        set_cache(cache_key, result)
+        
+        return result
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -984,6 +1040,14 @@ def get_attendance_by_date_range(
 ):
     """Get attendance records for a date range (admin can see all employees, non-admin users see only their own)"""
     try:
+        # Determine effective employee_id for caching
+        effective_employee_id = employee_id or current_user.get("employee_id", "all")
+        
+        # Check cache first
+        cache_key = get_cache_key(effective_employee_id, start_date, end_date, "range")
+        cached_result = get_from_cache(cache_key)
+        if cached_result is not None:
+            return cached_result
         # Parse dates
         try:
             start_parsed = datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -1082,7 +1146,7 @@ def get_attendance_by_date_range(
         employee_lookup = {emp["employee_id"]: emp for emp in employees}
         
         # Format response
-        return [{
+        result = [{
             "name": employee_lookup.get(att["employee_id"], {}).get("name", "Unknown"),
             "objectId": att["objectId"],
             "id": att["employee_id"],
@@ -1098,6 +1162,11 @@ def get_attendance_by_date_range(
             "created_at": att.get("createdAt"),
             "updated_at": att.get("updatedAt")
         } for att in attendance_records]
+        
+        # Cache the result
+        set_cache(cache_key, result)
+        
+        return result
         
     except HTTPException:
         raise

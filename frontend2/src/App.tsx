@@ -23,6 +23,7 @@ import ProfileUpdate from './pages/ProfileUpdate';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { NotificationProvider } from './components/ui/NotificationProvider';
 import { AuthProvider } from './contexts/AuthContext';
+import { EmployeeProvider } from './contexts/EmployeeContext';
 
 // Create WebSocket context
 const WebSocketContext = createContext<{
@@ -286,8 +287,9 @@ function App() {
       <CssBaseline />
       <NotificationProvider>
         <AuthProvider>
-          <WebSocketProvider>
-            <LocalizationProvider dateAdapter={AdapterDateFns}>
+          <EmployeeProvider>
+            <WebSocketProvider>
+              <LocalizationProvider dateAdapter={AdapterDateFns}>
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -348,8 +350,9 @@ function App() {
                   </ProtectedRoute>
                 } />
               </Routes>
-            </LocalizationProvider>
-          </WebSocketProvider>
+              </LocalizationProvider>
+            </WebSocketProvider>
+          </EmployeeProvider>
         </AuthProvider>
       </NotificationProvider>
     </ThemeProvider>

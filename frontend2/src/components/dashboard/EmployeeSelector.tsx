@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Card,
@@ -19,7 +19,7 @@ import {
   Business as BusinessIcon,
 } from '@mui/icons-material';
 import { Employee } from '../../types/dashboard';
-import api from '../../api/config';
+import { useEmployees } from '../../contexts/EmployeeContext';
 
 interface EmployeeSelectorProps {
   selectedEmployee: Employee | null;
@@ -33,34 +33,10 @@ const EmployeeSelectorComponent: React.FC<EmployeeSelectorProps> = ({
   loading = false,
 }) => {
   const theme = useTheme();
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [employeesLoading, setEmployeesLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
-
-  // Fetch employees
-  useEffect(() => {
-    const fetchEmployees = async () => {
-      setEmployeesLoading(true);
-      try {
-        const response = await api.get('/employees');
-        const employeeData = response.data.map((emp: any) => ({
-          employee_id: emp.employee_id,
-          name: emp.name || `Employee ${emp.employee_id}`,
-          email: emp.email,
-          is_admin: emp.is_admin,
-          is_active: emp.is_active,
-          objectId: emp.objectId,
-        }));
-        setEmployees(employeeData);
-      } catch (error) {
-        console.error('Error fetching employees:', error);
-      } finally {
-        setEmployeesLoading(false);
-      }
-    };
-
-    fetchEmployees();
-  }, []);
+  
+  // Use employee context instead of local state
+  const { state: { employees, isLoading: employeesLoading, error }, getActiveEmployees } = useEmployees();
 
   // Create "All Employees" option
   const allEmployeesOption: Employee = {
@@ -72,8 +48,8 @@ const EmployeeSelectorComponent: React.FC<EmployeeSelectorProps> = ({
     objectId: 'all',
   };
 
-  // Combine all employees option with regular employees
-  const employeeOptions = [allEmployeesOption, ...employees.filter(emp => emp.is_active !== false)];
+  // Combine all employees option with active employees from context
+  const employeeOptions = [allEmployeesOption, ...getActiveEmployees()];
 
   const handleEmployeeChange = (_: any, newValue: Employee | null) => {
     if (newValue?.employee_id === 'all') {
