@@ -108,7 +108,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const storedRefreshToken = AuthService.getRefreshToken();
 
         if (storedUser && storedAccessToken && storedRefreshToken) {
-          // Check if token is still valid
+          // Check if access token is still valid
           if (AuthService.isAccessTokenValid()) {
             dispatch({
               type: 'AUTH_SUCCESS',
@@ -119,22 +119,30 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               },
             });
           } else {
-            // Try to refresh token
-            try {
-              const newAccessToken = await AuthService.refreshAccessToken();
-              const user = await AuthService.getCurrentUser();
-              
-              dispatch({
-                type: 'AUTH_SUCCESS',
-                payload: {
-                  user,
-                  accessToken: newAccessToken,
-                  refreshToken: AuthService.getRefreshToken()!,
-                },
-              });
-            } catch (error) {
-              // Refresh failed - both tokens are likely expired
-              console.log('Token refresh failed during initialization:', error);
+            // Access token expired, check if refresh token is still valid
+            if (AuthService.isRefreshTokenValid()) {
+              try {
+                const newAccessToken = await AuthService.refreshAccessToken();
+                const user = await AuthService.getCurrentUser();
+                
+                dispatch({
+                  type: 'AUTH_SUCCESS',
+                  payload: {
+                    user,
+                    accessToken: newAccessToken,
+                    refreshToken: AuthService.getRefreshToken()!,
+                  },
+                });
+              } catch (error) {
+                // Refresh failed even though token seemed valid
+                console.log('Token refresh failed during initialization:', error);
+                AuthService.clearTokens();
+                AuthService.clearUser();
+                dispatch({ type: 'AUTH_LOGOUT' });
+              }
+            } else {
+              // Refresh token is also expired or invalid
+              console.log('Refresh token has expired, logging out');
               AuthService.clearTokens();
               AuthService.clearUser();
               dispatch({ type: 'AUTH_LOGOUT' });

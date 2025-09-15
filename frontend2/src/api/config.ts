@@ -83,10 +83,15 @@ api.interceptors.response.use(
           authServiceInstance = AuthService;
         }
 
-        // Check if we have a refresh token before attempting refresh
+        // Check if we have a valid refresh token before attempting refresh
         const refreshToken = authServiceInstance.getRefreshToken();
-        if (!refreshToken) {
-          // No refresh token available, redirect to login
+        if (!refreshToken || !authServiceInstance.isRefreshTokenValid()) {
+          // No refresh token or refresh token expired, redirect to login
+          console.log('No valid refresh token available, redirecting to login');
+          if (authServiceInstance) {
+            authServiceInstance.clearTokens();
+            authServiceInstance.clearUser();
+          }
           if (window.location.pathname !== '/login') {
             window.location.href = '/login';
           }

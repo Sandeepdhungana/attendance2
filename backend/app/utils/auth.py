@@ -3,17 +3,16 @@ from passlib.context import CryptContext
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-from app.config import BACK4APP_APPLICATION_ID
+from app.config import (
+    JWT_SECRET_KEY, 
+    JWT_ALGORITHM, 
+    ACCESS_TOKEN_EXPIRE_MINUTES, 
+    REFRESH_TOKEN_EXPIRE_HOURS
+)
 from app.utils.time_utils import get_local_time
 import logging
 
 logger = logging.getLogger(__name__)
-
-# JWT Configuration
-JWT_SECRET_KEY = BACK4APP_APPLICATION_ID  # Using app ID as secret key
-JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30  # 30 minutes
-REFRESH_TOKEN_EXPIRE_DAYS = 30   # 30 days
 
 
 
@@ -32,9 +31,17 @@ class AuthUtils:
         return pwd_context.verify(password, hashed_password)
     
     @staticmethod
-    def generate_refresh_token() -> str:
-        """Generate a secure random refresh token"""
-        return secrets.token_urlsafe(32)
+    def create_refresh_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+        """Create a JWT refresh token"""
+        to_encode = data.copy()
+        if expires_delta:
+            expire = datetime.utcnow() + expires_delta
+        else:
+            expire = datetime.utcnow() + timedelta(hours=REFRESH_TOKEN_EXPIRE_HOURS)
+        
+        to_encode.update({"exp": expire, "token_type": "refresh"})
+        encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+        return encoded_jwt
     
     @staticmethod
     def hash_token(token: str) -> str:
@@ -56,9 +63,33 @@ class AuthUtils:
         return encoded_jwt
     
     @staticmethod
-    def create_refresh_token_expires() -> datetime:
-        """Create expiration datetime for refresh token"""
-        return get_local_time() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    def verify_refresh_token(token: str) -> Optional[Dict[str, Any]]:
+        """Verify and decode a JWT refresh token"""
+        try:
+            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            # Verify it's actually a refresh token
+            if payload.get("token_type") != "refresh":
+                logger.warning("Token is not a refresh token")
+                return None
+            return payload
+        except jwt.ExpiredSignatureError:
+            logger.warning("Refresh token has expired")
+            return None
+        except JWTError:
+            logger.warning("Invalid refresh token")
+            return None
+    
+    @staticmethod
+    def get_refresh_token_expiry(token: str) -> Optional[datetime]:
+        """Get refresh token expiration time"""
+        try:
+            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM], options={"verify_exp": False})
+            exp_timestamp = payload.get("exp")
+            if exp_timestamp:
+                return datetime.utcfromtimestamp(exp_timestamp)
+            return None
+        except JWTError:
+            return None
     
     @staticmethod
     def verify_access_token(token: str) -> Optional[Dict[str, Any]]:

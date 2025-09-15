@@ -79,6 +79,51 @@ export class AuthService {
     return token ? !this.isTokenExpired(token) : false;
   }
 
+  public isRefreshTokenValid(): boolean {
+    const refreshToken = this.getRefreshToken();
+    if (!refreshToken) return false;
+    
+    try {
+      // Check if it's a JWT token (should have 3 parts separated by dots)
+      const parts = refreshToken.split('.');
+      if (parts.length !== 3) {
+        console.log('Refresh token is not a JWT format');
+        return false;
+      }
+      
+      const payload = JSON.parse(atob(parts[1]));
+      const currentTime = Math.floor(Date.now() / 1000);
+      
+      // Check if it's actually a refresh token
+      if (payload.token_type !== 'refresh') {
+        console.log('Token is not a refresh token');
+        return false;
+      }
+      
+      const isValid = payload.exp > currentTime;
+      if (!isValid) {
+        console.log('Refresh token has expired');
+      }
+      
+      return isValid;
+    } catch (error) {
+      console.error('Error validating refresh token:', error);
+      return false;
+    }
+  }
+
+  public getRefreshTokenExpiry(): Date | null {
+    const refreshToken = this.getRefreshToken();
+    if (!refreshToken) return null;
+    
+    try {
+      const payload = JSON.parse(atob(refreshToken.split('.')[1]));
+      return new Date(payload.exp * 1000);
+    } catch {
+      return null;
+    }
+  }
+
   // API calls
   public async login(credentials: LoginRequest): Promise<TokenResponse> {
     try {
@@ -129,6 +174,14 @@ export class AuthService {
     if (!refreshToken) {
       console.log('No refresh token available');
       throw new Error('No refresh token available');
+    }
+
+    // Check if refresh token is still valid before attempting refresh
+    if (!this.isRefreshTokenValid()) {
+      console.log('Refresh token has expired, clearing tokens');
+      this.clearTokens();
+      this.clearUser();
+      throw new Error('Refresh token expired');
     }
 
     console.log('Starting token refresh...');

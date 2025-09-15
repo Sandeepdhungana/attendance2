@@ -44,7 +44,14 @@ cd backend
 pip install -r requirements.txt
 ```
 
-3. Run the backend server:
+3. Configure environment variables (optional):
+```bash
+# Create .env file in backend directory with your settings
+ACCESS_TOKEN_EXPIRE_MINUTES=30  # Access token expiry in minutes
+REFRESH_TOKEN_EXPIRE_HOURS=48   # Refresh token expiry in hours
+```
+
+4. Run the backend server:
 ```bash
 uvicorn main:app --reload
 ```

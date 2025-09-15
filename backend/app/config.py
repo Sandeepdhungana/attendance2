@@ -38,4 +38,13 @@ SENDPULSE_CLIENT_ID = os.getenv("SENDPULSE_CLIENT_ID")
 SENDPULSE_CLIENT_SECRET = os.getenv("SENDPULSE_CLIENT_SECRET")
 
 # Face recognition settings
-FACE_RECOGNITION_THRESHOLD = float(os.getenv("FACE_RECOGNITION_THRESHOLD", "0.6")) 
+FACE_RECOGNITION_THRESHOLD = float(os.getenv("FACE_RECOGNITION_THRESHOLD", "0.6"))
+
+# JWT Authentication settings
+# You can override these in your .env file:
+# ACCESS_TOKEN_EXPIRE_MINUTES=30  (in minutes)
+# REFRESH_TOKEN_EXPIRE_HOURS=48   (in hours)
+JWT_SECRET_KEY = BACK4APP_APPLICATION_ID  # Using app ID as secret key
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))  # 30 minutes
+REFRESH_TOKEN_EXPIRE_HOURS = int(os.getenv("REFRESH_TOKEN_EXPIRE_HOURS", "48"))   # 48 hours 

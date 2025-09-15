@@ -10,6 +10,7 @@ import logging
 import random
 import string
 from datetime import timedelta
+from app.config import REFRESH_TOKEN_EXPIRE_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +101,14 @@ async def login(user_login: UserLogin):
         }
         access_token = AuthUtils.create_access_token(token_data)
         
-        # Create refresh token
-        refresh_token = AuthUtils.generate_refresh_token()
-        refresh_token_hash = AuthUtils.hash_token(refresh_token)
-        expires_at = AuthUtils.create_refresh_token_expires()
+        # Create JWT refresh token (configurable expiry)
+        refresh_token = AuthUtils.create_refresh_token(token_data)
         
-        # Store refresh token in database
+        # We still store a hash for blacklisting purposes, but the token itself is now a JWT
+        refresh_token_hash = AuthUtils.hash_token(refresh_token)
+        expires_at = get_local_time() + timedelta(hours=REFRESH_TOKEN_EXPIRE_HOURS)
+        
+        # Store refresh token hash in database
         refresh_token_model = RefreshToken()
         refresh_token_model.create_token(
             user_id=user["objectId"],
@@ -122,7 +125,7 @@ async def login(user_login: UserLogin):
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer",
-            expires_in=1800  # 30 minutes
+            expires_in=1800  # 30 minutes for access token (refresh token expires per config)
         )
         
     except HTTPException:
@@ -191,42 +194,35 @@ async def register(user_register: UserRegister):
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(refresh_request: RefreshTokenRequest):
     """
-    Refresh JWT access token using refresh token
+    Refresh JWT access token using JWT refresh token
     """
     try:
-        # Hash the provided refresh token
-        token_hash = AuthUtils.hash_token(refresh_request.refresh_token)
+        # Verify the JWT refresh token
+        refresh_payload = AuthUtils.verify_refresh_token(refresh_request.refresh_token)
         
-        # Find refresh token in database
+        if not refresh_payload:
+            logger.warning("Invalid or expired refresh token used")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired refresh token"
+            )
+        
+        # Check if token is blacklisted in database
+        token_hash = AuthUtils.hash_token(refresh_request.refresh_token)
         refresh_token_model = RefreshToken()
         stored_token = refresh_token_model.find_by_token(token_hash)
         
         if not stored_token:
-            logger.warning("Invalid refresh token used")
+            logger.warning("Refresh token not found in database (possibly revoked)")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token"
+                detail="Refresh token has been revoked"
             )
         
-        # Check if token is expired
-        current_time = get_local_time()
-        expires_at = stored_token.get("expires_at")
-        if isinstance(expires_at, dict) and "iso" in expires_at:
-            expires_at = expires_at["iso"]
-        
-        from dateutil.parser import parse
-        if parse(expires_at) < current_time:
-            logger.warning("Expired refresh token used")
-            # Revoke expired token
-            refresh_token_model.revoke_token(stored_token["objectId"])
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh token expired"
-            )
-        
-        # Get employee data
+        # Get employee data from refresh token payload
+        user_id = refresh_payload.get("user_id")
         employee_model = Employee()
-        user = employee_model.get(stored_token["user_id"])
+        user = employee_model.get(user_id)
         
         if not user or not user.get("is_active", True):
             logger.warning("Refresh token used for inactive user")
@@ -244,15 +240,15 @@ async def refresh_token(refresh_request: RefreshTokenRequest):
         }
         access_token = AuthUtils.create_access_token(token_data)
         
-        # Generate new refresh token
-        new_refresh_token = AuthUtils.generate_refresh_token()
+        # Generate new JWT refresh token
+        new_refresh_token = AuthUtils.create_refresh_token(token_data)
         new_refresh_token_hash = AuthUtils.hash_token(new_refresh_token)
-        expires_at = AuthUtils.create_refresh_token_expires()
+        expires_at = get_local_time() + timedelta(hours=REFRESH_TOKEN_EXPIRE_HOURS)
         
         # Revoke old refresh token
         refresh_token_model.revoke_token(stored_token["objectId"])
         
-        # Store new refresh token
+        # Store new refresh token hash
         refresh_token_model.create_token(
             user_id=user["objectId"],
             token_hash=new_refresh_token_hash,
@@ -265,7 +261,7 @@ async def refresh_token(refresh_request: RefreshTokenRequest):
             access_token=access_token,
             refresh_token=new_refresh_token,
             token_type="bearer",
-            expires_in=1800  # 30 minutes
+            expires_in=1800  # 30 minutes for access token (refresh token expires per config)
         )
         
     except HTTPException:
